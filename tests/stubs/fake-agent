@@ -1,0 +1,409 @@
+#!/usr/bin/python3 -ISB
+"""Stub agent CLI for the runner tests. It never contacts any model.
+
+The runner hands agents an allowlisted environment, so the mode normally comes from
+$HOME/.fake-agent.json ({"mode": ..., "log": ..., "resetsAt": ...}); FAKE_AGENT_MODE and
+FAKE_AGENT_LOG are honoured when present. The harness is inferred from how the stub was
+started (its file name, or the gemini bundle path handed to a fake node).
+
+Every start appends one JSON line to the log: argv, cwd, environment, the sha256 and length
+of everything read from stdin. The stdin text itself is never written to the log; the cursor and
+pi modes echo it on stdout the way the real CLIs do, so the tests can prove the runner drops it.
+
+Event shapes follow the recorded streams in the R7 research notes (Cursor stream-json, Pi json
+mode, OpenCode APIError lines with a responseBody).
+"""
+import datetime
+import hashlib
+import json
+import os
+import re
+import signal
+import sys
+import time
+import uuid
+
+
+def config():
+    home = os.environ.get("HOME", "")
+    data = {}
+    try:
+        with open(os.path.join(home, ".fake-agent.json"), "rb") as handle:
+            data = json.loads(handle.read(65536).decode("utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    mode = os.environ.get("FAKE_AGENT_MODE") or data.get("mode") or "done"
+    log = os.environ.get("FAKE_AGENT_LOG") or data.get("log") or os.path.join(home, "fake-agent.log")
+    return mode, log, data
+
+
+def harness_of(argv):
+    base = os.path.basename(argv[0])
+    if len(argv) > 1 and argv[1].endswith("gemini.js"):
+        return "gemini"
+    if base in ("claude", "opencode", "codex", "gemini", "pi"):
+        return base
+    if base in ("cursor-agent", "agent"):
+        return "cursor"
+    if len(argv) > 1 and argv[1] == "run":
+        return "opencode"
+    if len(argv) > 1 and argv[1] == "exec":
+        return "codex"
+    if "--mode" in argv and "json" in argv:
+        return "pi"
+    if "--workspace" in argv:
+        return "cursor"
+    if "--output-format" in argv:
+        return "claude"
+    return "gemini"
+
+
+def value_after(argv, flag):
+    if flag in argv:
+        index = argv.index(flag)
+        if index + 1 < len(argv):
+            return argv[index + 1]
+    return None
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def err(text):
+    sys.stderr.write(text + "\n")
+    sys.stderr.flush()
+
+
+def claude(mode, argv, data):
+    sid = value_after(argv, "--session-id") or value_after(argv, "--resume") or str(uuid.uuid4())
+    if "--fork-session" in argv:
+        sid = str(uuid.uuid4())
+    if mode == "not_found":
+        err("No conversation found with session ID: " + (value_after(argv, "--resume") or sid))
+        return 1
+    permission = value_after(argv, "--permission-mode") or "default"
+    if mode == "wrong_init_mode":
+        permission = "default"
+    source = "ANTHROPIC_API_KEY" if mode == "claude_api_key_source" else "none"
+    out({"type": "system", "subtype": "init", "session_id": sid, "permissionMode": permission,
+         "apiKeySource": source, "cwd": os.getcwd(), "tools": ["Read", "Grep"]})
+    if mode in ("wrong_init_mode", "claude_api_key_source"):
+        time.sleep(30)
+        out({"type": "assistant", "session_id": sid,
+             "message": {"content": [{"type": "text", "text": "should never be reached"}]}})
+        return 0
+    resets = int(data.get("resetsAt") or (time.time() + 3600))
+    if mode == "claude_overage_event":
+        out({"type": "rate_limit_event", "session_id": sid,
+             "rate_limit_info": {"status": "allowed_warning", "resetsAt": resets, "rateLimitType": "five_hour",
+                                 "isUsingOverage": True, "overageStatus": "allowed"}})
+        time.sleep(float(data.get("afterGuardSleep") or 1.5))
+    if mode == "limit_event":
+        out({"type": "rate_limit_event", "session_id": sid,
+             "rate_limit_info": {"status": "rejected", "resetsAt": resets, "rateLimitType": "five_hour",
+                                 "isUsingOverage": False, "overageStatus": "rejected"}})
+        banner = "You've hit your session limit · resets 9:30pm (America/Chicago)"
+        out({"type": "assistant", "session_id": sid, "error": "rate_limit",
+             "message": {"content": [{"type": "text", "text": banner}]}})
+        out({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+             "result": banner, "session_id": sid})
+        return 1
+    if mode == "limit_banner":
+        banner = data.get("banner") or "You've hit your session limit · resets 9:30pm (America/Chicago)"
+        out({"type": "result", "subtype": "success", "is_error": True, "result": banner, "session_id": sid})
+        return 1
+    if mode == "auth":
+        out({"type": "assistant", "session_id": sid, "error": "authentication_failed",
+             "message": {"content": [{"type": "text", "text": "Not logged in · Please run /login"}]}})
+        out({"type": "result", "subtype": "success", "is_error": True, "result": "Not logged in",
+             "session_id": sid})
+        return 1
+    if mode == "max_turns":
+        out({"type": "result", "subtype": "error_max_turns", "is_error": True, "session_id": sid})
+        return 1
+    if mode == "transient":
+        text = "API Error: Server is temporarily limiting requests (not your usage limit)"
+        out({"type": "assistant", "session_id": sid, "error": "rate_limit",
+             "message": {"content": [{"type": "text", "text": text}]}})
+        out({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429, "result": text,
+             "session_id": sid})
+        return 1
+    out({"type": "assistant", "session_id": sid, "message": {"content": [{"type": "text", "text": "OK"}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "result": "OK", "session_id": sid,
+         "num_turns": 1})
+    return 0
+
+
+def codex(mode, argv, data):
+    sid = str(uuid.uuid4())
+    for word in ("resume", "fork"):
+        if word in argv:
+            sid = argv[argv.index(word) + 1] if word == "resume" else str(uuid.uuid4())
+    if mode == "not_found":
+        err("Error: thread/resume: thread/resume failed: no rollout found for thread id " + sid + " (code -32600)")
+        return 1
+    if mode == "auth":
+        err("Not logged in")
+        return 1
+    if mode == "codex_untrusted":
+        err("Not inside a trusted directory and --skip-git-repo-check was not specified.")
+        return 1
+    out({"type": "thread.started", "thread_id": sid})
+    out({"type": "turn.started"})
+    if mode in ("limit_event", "limit_banner"):
+        text = data.get("banner") or "You've hit your usage limit. Try again at 7:11 PM."
+        out({"type": "error", "message": text})
+        out({"type": "turn.failed", "error": {"message": text}})
+        return 1
+    if mode == "transient":
+        out({"type": "error", "message": "Selected model is at capacity. Please try a different model."})
+        out({"type": "turn.failed", "error": {"message": "Selected model is at capacity."}})
+        return 1
+    last = value_after(argv, "-o")
+    if last:
+        try:
+            with open(last, "w") as handle:
+                handle.write("OK\n")
+        except OSError:
+            pass
+    out({"type": "item.completed", "item": {"type": "agent_message", "text": "OK"}})
+    out({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    return 0
+
+
+def _api_error(sid, status, error_type, retry_after, metadata=None):
+    body = {"type": "error", "error": {"type": error_type, "message": "Rate limit exceeded. Please try again later."},
+            "metadata": metadata or {}}
+    return {"type": "error", "sessionID": sid, "timestamp": int(time.time() * 1000),
+            "error": {"name": "APIError", "data": {
+                "message": "Rate limit exceeded. Please try again later.", "statusCode": status,
+                "isRetryable": status == 429,
+                "responseHeaders": {"content-type": "application/json", "retry-after": str(retry_after)},
+                "responseBody": json.dumps(body)}}}
+
+
+def opencode(mode, argv, data):
+    sid = value_after(argv, "-s") or "ses_" + uuid.uuid4().hex[:20]
+    if "--fork" in argv:
+        sid = "ses_" + uuid.uuid4().hex[:20]
+    if mode == "not_found":
+        err("Error: Session not found")
+        return 1
+    if mode == "opencode_silent":
+        # OpenCode sleeping on a provider retry-after prints nothing at all.
+        time.sleep(600)
+        return 0
+    if mode == "opencode_free_limit":
+        out(_api_error(sid, 429, "FreeUsageLimitError", data.get("retryAfter", 3600)))
+        return 1
+    if mode == "opencode_go_limit":
+        out(_api_error(sid, 429, "GoUsageLimitError", data.get("retryAfter", 7200),
+                       {"workspace": "wrk_PROBE", "limitName": data.get("limitName", "5 hour")}))
+        return 1
+    if mode == "opencode_credits":
+        out(_api_error(sid, 401, "CreditsError", 0))
+        return 1
+    out({"type": "step_start", "sessionID": sid, "timestamp": int(time.time() * 1000)})
+    if mode in ("limit_event", "limit_banner"):
+        out({"type": "error", "sessionID": sid,
+             "error": {"name": "APIError", "data": {"message": "FreeUsageLimitError: Free usage exceeded"}}})
+        return 1
+    if mode == "auth":
+        out({"type": "error", "sessionID": sid,
+             "error": {"name": "ProviderAuthError", "data": {"message": "Invalid credentials"}}})
+        return 1
+    if mode == "opencode_tool_violation":
+        out({"type": "tool_use", "sessionID": sid,
+             "part": {"tool": "edit", "state": {"status": "completed", "title": "file.txt"}}})
+    out({"type": "text", "sessionID": sid, "part": {"text": "OK"}})
+    out({"type": "step_finish", "sessionID": sid, "part": {"reason": "stop"}})
+    return 0
+
+
+def gemini(mode, argv, data):
+    sid = value_after(argv, "--session-id") or value_after(argv, "--resume") or str(uuid.uuid4())
+    if mode == "not_found":
+        err("Error resuming session: Invalid session identifier")
+        return 42
+    if mode == "auth":
+        err("Please set an Auth method in your settings.")
+        return 41
+    if mode == "gemini_rc55":
+        err("Gemini CLI is not running in a trusted directory.")
+        return 55
+    if mode == "max_turns":
+        return 53
+    if mode in ("limit_event", "limit_banner"):
+        sys.stdout.write(json.dumps({"session_id": sid, "error": {
+            "type": "TerminalQuotaError", "message": "You have exhausted your daily quota on this model.",
+            "code": 429}}, indent=2) + "\n")
+        return 1
+    if mode == "transient":
+        sys.stdout.write(json.dumps({"session_id": sid, "error": {
+            "type": "RetryableQuotaError", "message": "Please retry in 20.5s", "code": 429}}, indent=2) + "\n")
+        return 1
+    sys.stdout.write(json.dumps({"session_id": sid, "response": "OK", "stats": {}}, indent=2) + "\n")
+    return 0
+
+
+def cursor(mode, argv, data, stdin):
+    sid = value_after(argv, "--resume") or str(uuid.uuid4())
+    if mode == "cursor_untrusted":
+        err("Workspace Trust Required: open cursor-agent in this folder and trust it.")
+        return 1
+    if mode == "cursor_sandbox":
+        err("Error: Sandbox mode is enabled but not available on this system. Sandbox failed to start, "
+            "possibly due to AppArmor configuration.")
+        return 1
+    if mode == "cursor_limit_monthly":
+        err("You've hit your usage limit. Your monthly cycle ends on %s." % data.get("cycleEnd", "10/9/2026"))
+        return 1
+    source = "env" if mode == "cursor_api_key_env" else "login"
+    out({"type": "system", "subtype": "init", "apiKeySource": source, "cwd": os.getcwd(), "session_id": sid,
+         "model": "Auto", "permissionMode": "default"})
+    if mode == "cursor_api_key_env":
+        time.sleep(30)
+        return 0
+    # The real CLI echoes the prompt back as a user event.
+    out({"type": "user", "message": {"role": "user", "content": [{"type": "text",
+                                                                   "text": stdin.decode("utf-8", "replace")}]},
+         "session_id": sid})
+    out({"type": "interaction_query", "subtype": "request", "query_type": "webSearchRequestQuery",
+         "query": {"q": stdin.decode("utf-8", "replace")[:80]}, "session_id": sid, "timestamp_ms": 1})
+    out({"type": "tool_call", "subtype": "completed", "call_id": "c1",
+         "tool_call": {"readToolCall": {"args": {"path": "README.md"}, "result": {"success": {"content": "x"}}}},
+         "session_id": sid})
+    if mode == "cursor_write_success":
+        out({"type": "tool_call", "subtype": "completed", "call_id": "c2",
+             "tool_call": {"writeToolCall": {"args": {"path": "hello.txt"}, "result": {"success": {"lines": 1}}}},
+             "session_id": sid})
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "OK"}]},
+         "session_id": sid})
+    out({"type": "result", "subtype": "success", "duration_ms": 10, "is_error": False, "result": "OK",
+         "session_id": sid, "request_id": "r1"})
+    return 0
+
+
+def _pi_session_file(cwd, stamp, sid):
+    home = os.environ.get("HOME", "")
+    folder = "--" + re.sub(r"[/\\:]", "-", cwd.lstrip("/")) + "--"
+    name = re.sub(r"[:.]", "-", stamp) + "_" + sid + ".jsonl"
+    return os.path.join(home, ".pi", "agent", "sessions", folder, name)
+
+
+def pi(mode, argv, data, stdin):
+    provider = value_after(argv, "--provider") or "fakeok"
+    model = value_after(argv, "--model") or "fake-model"
+    session = value_after(argv, "--session")
+    sid = value_after(argv, "--session-id") or str(uuid.uuid4())
+    if session:
+        match = re.search(r"_([0-9a-f-]{36})\.jsonl$", session)
+        sid = match.group(1) if match else sid
+    if mode == "pi_no_header":
+        out({"type": "agent_start"})
+        time.sleep(30)
+        return 0
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "123Z"
+    cwd = os.getcwd()
+    out({"type": "session", "version": 3, "id": sid, "timestamp": stamp, "cwd": cwd})
+    out({"type": "agent_start"})
+    out({"type": "turn_start"})
+    user = {"role": "user", "content": [{"type": "text", "text": stdin.decode("utf-8", "replace")}]}
+    out({"type": "message_start", "message": user})
+    out({"type": "message_end", "message": user})
+    if mode == "pi_exit0_error":
+        out({"type": "agent_end", "messages": [user], "willRetry": False})
+        out({"type": "agent_settled"})
+        return 0
+    if mode == "pi_tool_bash":
+        out({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {"command": "ls"}})
+        time.sleep(30)
+        return 0
+    stop, error, reply_provider = "stop", None, provider
+    if mode == "pi_provider_mismatch":
+        reply_provider = "anthropic" if provider != "anthropic" else "openai-codex"
+    elif mode == "pi_error_extra_usage":
+        stop, error = "error", "You're out of extra usage. Add more at claude.ai/settings/usage to continue."
+    elif mode == "pi_error_codex_limit":
+        stop = "error"
+        error = ("You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min. "
+                 '{"type":"usage_limit_reached","plan_type":"plus","resets_in_seconds":2520}')
+    elif mode == "pi_quota":
+        stop, error = "error", "insufficient_quota: You exceeded your current quota, check your billing details."
+    if mode == "pi_done":
+        out({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "read", "args": {"path": "README.md"}})
+        out({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "read", "isError": False})
+    assistant = {"role": "assistant", "content": [{"type": "text", "text": "OK" if stop == "stop" else ""}],
+                 "api": "openai-completions", "provider": reply_provider, "model": model,
+                 "usage": {"input": 1, "output": 1, "totalTokens": 2}, "stopReason": stop}
+    if error:
+        assistant["errorMessage"] = error
+    out({"type": "message_start", "message": dict(assistant, stopReason="pending")})
+    out({"type": "message_end", "message": assistant})
+    if mode == "pi_provider_mismatch":
+        time.sleep(30)
+        return 0
+    out({"type": "turn_end", "message": assistant})
+    out({"type": "agent_end", "messages": [user, assistant], "willRetry": False})
+    out({"type": "agent_settled"})
+    if stop == "stop":
+        path = _pi_session_file(cwd, stamp, sid)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as handle:
+            handle.write(json.dumps({"type": "session", "version": 3, "id": sid, "timestamp": stamp,
+                                     "cwd": cwd}) + "\n")
+    return 0
+
+
+def main():
+    mode, log, data = config()
+    argv = list(sys.argv)
+    if argv[1:3] == ["agents", "--json"]:
+        sys.stdout.write(json.dumps(data.get("agents", [])) + "\n")
+        return 0
+    name = harness_of(argv)
+    stdin = sys.stdin.buffer.read()
+    entry = {"harness": name, "mode": mode, "argv": argv, "cwd": os.getcwd(), "env": dict(os.environ),
+             "stdinSha256": hashlib.sha256(stdin).hexdigest(), "stdinBytes": len(stdin), "pid": os.getpid(),
+             "pgid": os.getpgid(0)}
+    child = None
+    if mode == "term_ignoring_child":
+        child = os.fork()
+        if child == 0:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            time.sleep(600)
+            os._exit(0)
+        entry["childPid"] = child
+    with open(log, "a") as handle:
+        handle.write(json.dumps(entry) + "\n")
+
+    if mode == "sleep":
+        time.sleep(600)
+        return 0
+    if mode == "term_ignoring_child":
+        sys.stdout.write("working\n")
+        sys.stdout.flush()
+        time.sleep(600)
+        return 0
+    if mode == "flood":
+        chunk = "x" * 65536
+        for _ in range(24):
+            sys.stdout.write(chunk)
+        sys.stdout.write("\n")
+        line = json.dumps({"type": "noise", "pad": "y" * 900}) + "\n"
+        for _ in range(3000):
+            sys.stdout.write(line)
+            sys.stderr.write("\x1b[31mnoise on stderr\x1b[0m\n")
+        sys.stdout.flush()
+        return claude("done", argv, data) if name == "claude" else 0
+    if name == "cursor":
+        return cursor(mode, argv, data, stdin)
+    if name == "pi":
+        return pi(mode, argv, data, stdin)
+    return {"claude": claude, "codex": codex, "opencode": opencode, "gemini": gemini}[name](mode, argv, data)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

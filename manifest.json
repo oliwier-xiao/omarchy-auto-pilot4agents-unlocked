@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "oliwier.auto-pilot4agents",
+  "name": "Auto Pilot 4 Agents",
+  "version": "0.2.0",
+  "author": "oliwier-xiao",
+  "license": "MIT",
+  "description": "Write a prompt now and send it later to a Claude Code, OpenCode, Codex, Gemini CLI, Cursor Agent or Pi session: in a few minutes, at a clock time, or right after a usage limit resets. Each job runs headless in a transient systemd user timer, so it fires while the screen is locked.",
+  "homepage": "https://github.com/oliwier-xiao/omarchy-auto-pilot4agents",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": { "service": "Service.qml", "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Auto Pilot",
+    "description": "Scheduled prompts for your coding agents, with a countdown to the next one.",
+    "category": "AI",
+    "aliases": ["schedule", "autopilot", "claude", "opencode", "codex", "gemini", "pi"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "barLabel": "Next run" },
+    "schema": [
+      {
+        "key": "barLabel",
+        "type": "enum",
+        "label": "Next to the bar icon",
+        "options": ["Next run", "Queued count", "Nothing"],
+        "defaultValue": "Next run",
+        "description": "Next run shows the countdown to the soonest armed job. Queued count shows how many jobs are armed. Nothing leaves the icon alone."
+      }
+    ]
+  }
+}

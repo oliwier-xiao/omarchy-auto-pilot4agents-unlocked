@@ -1,0 +1,7 @@
+# Local development only. None of this belongs in a plugin folder on somebody's disk.
+__pycache__/
+*.pyc
+*.log
+*.swp
+*~
+.DS_Store

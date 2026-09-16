@@ -1,0 +1,43 @@
+#!/usr/bin/python3 -I -S
+"""Scripted stand-in for an agent CLI in the paid, models and scan tests. No network, no model.
+
+FAKE_CLI_SCRIPT names a JSON file mapping the argument words (joined by one space, after any
+.js bundle path) to an answer:
+  {"login status": {"stdout": "...", "stderr": "...", "rc": 0, "sleep": 0.0},
+   "models": {"stdoutFile": "/abs/path"},
+   "*": {"rc": 2}}
+"*" answers anything not listed. Every call is appended to FAKE_CLI_LOG as one JSON line:
+[FAKE_CLI_NAME, argument words, sorted environment variable names].
+"""
+import json
+import os
+import sys
+import time
+
+
+def main():
+    args = [arg for arg in sys.argv[1:] if not arg.endswith(".js")]
+    log = os.environ.get("FAKE_CLI_LOG")
+    if log:
+        with open(log, "a") as handle:
+            handle.write(json.dumps([os.environ.get("FAKE_CLI_NAME", ""), args, sorted(os.environ)]) + "\n")
+    script = {}
+    path = os.environ.get("FAKE_CLI_SCRIPT")
+    if path and os.path.exists(path):
+        with open(path) as handle:
+            script = json.load(handle)
+    answer = script.get(" ".join(args)) or script.get("*") or {"rc": 2}
+    if answer.get("sleep"):
+        time.sleep(float(answer["sleep"]))
+    if answer.get("stdoutFile"):
+        with open(answer["stdoutFile"], "rb") as handle:
+            sys.stdout.buffer.write(handle.read())
+    else:
+        sys.stdout.write(answer.get("stdout", ""))
+    sys.stdout.flush()
+    sys.stderr.write(answer.get("stderr", ""))
+    sys.stderr.flush()
+    sys.exit(int(answer.get("rc", 0)))
+
+
+main()
