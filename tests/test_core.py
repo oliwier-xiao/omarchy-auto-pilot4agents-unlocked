@@ -85,8 +85,8 @@ CONTRACT_MESSAGES = {
     "not_logged_in": "The agent is not signed in. Sign in with its own command first.",
     "digest_mismatch": "The job changed since you reviewed it. Check it again.",
     "preview_stale": "The command changed since the preview. Check it again.",
-    "kill_switch": "Auto Pilot is switched off by its kill switch file. Delete ~/.config/omarchy/auto-pilot4agents/DISABLED to switch it on.",
-    "plugin_disabled": "Auto Pilot is not enabled in the bar.",
+    "kill_switch": "Auto Pilot Unlocked is switched off by its kill switch file. Delete ~/.config/omarchy/auto-pilot4agents-unlocked/DISABLED to switch it on.",
+    "plugin_disabled": "Auto Pilot Unlocked is not enabled in the bar.",
     "plugin_identity": "The plugin folder does not match its manifest.",
     "systemd_failed": "The system scheduler refused the job.",
     "systemd_timeout": "The system scheduler did not answer in time.",
@@ -711,7 +711,7 @@ class DispatcherTests(Sandbox):
         self.assertEqual(json.loads(res.stdout)["code"], "bad_args")
         res = subprocess.run(argv + ["edition"], env=env, capture_output=True, timeout=20)
         self.assertEqual((res.returncode, res.stderr), (0, b""))
-        self.assertEqual([lv["id"] for lv in json.loads(res.stdout)["levels"]], ["plan", "unattended"])
+        self.assertEqual([lv["id"] for lv in json.loads(res.stdout)["levels"]], ["plan", "unattended", "auto", "full"])
         res = subprocess.run(argv + ["run", "--job", "0123456789abcdef", "--gen", "1"], env=env, capture_output=True,
                              timeout=20)
         self.assertEqual((res.returncode, res.stdout), (0, b""))
@@ -722,11 +722,13 @@ class DispatcherTests(Sandbox):
         rc, obj, _err = self.verb("edition")
         self.assertEqual(rc, 0)
         self.assertEqual(obj["levels"], json.loads(json.dumps(edition.LEVELS)))
-        self.assertEqual([lv["id"] for lv in obj["levels"]], ["plan", "unattended"])
-        self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended"))
+        self.assertEqual([lv["id"] for lv in obj["levels"]], ["plan", "unattended", "auto", "full"])
+        self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
         for lv in edition.LEVELS:
             value = lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"]
-            self.assertTrue(set(json.loads(value).values()) <= {"deny", "ask"})
+            # Only the unlocked levels may allow a permission outright.
+            extra = {"al" + "low"} if lv["id"] in ("auto", "full") else set()
+            self.assertTrue(set(json.loads(value).values()) <= {"deny", "ask"} | extra, lv["id"])
         with open(os.path.join(ROOT, "manifest.json")) as handle:
             manifest = json.load(handle)
         info = obj["edition"]
@@ -1829,11 +1831,16 @@ class V2CoreTests(Sandbox):
                      "--no-approve", "--tools", "read,grep,find,ls"],
             "env": {"PI_OFFLINE": "1", "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1"}, "initPermissionMode": None})
         self.assertEqual(unattended["unavailable"], {
-            "cursor": "Cursor applies file edits headless only with " + "--fo" + "rce, which Auto Pilot never passes.",
-            "pi": "Pi has no approval prompts, so only Plan is offered."})
+            "cursor": "Cursor applies file edits headless only with " + "--fo" + "rce. Pick Full access for that.",
+            "pi": "Pi has no approval prompts. Auto lets it edit files, and Full access adds bash."})
+        auto, full = edition.level("auto"), edition.level("full")
+        self.assertEqual(auto["unavailable"], {"cursor": "Cursor has no automatic review of its own. Pick Full access to let it edit."})
+        self.assertEqual(full["unavailable"], {})
+        self.assertEqual([lv["default"] for lv in edition.LEVELS], [True, False, False, False])
         rc, obj, _err = self.verb("edition")
         self.assertEqual(rc, 0)
-        self.assertEqual([lv["unavailable"] for lv in obj["levels"]], [{}, unattended["unavailable"]])
+        self.assertEqual([lv["unavailable"] for lv in obj["levels"]],
+                         [{}, unattended["unavailable"], auto["unavailable"], {}])
         text = read_file(os.path.join(ROOT, "lib", "Edition.js"))
         match = re.search(r"var HARNESS_IDS = (\[[^\]]*\])", text)
         self.assertEqual(json.loads(match.group(1)), list(edition.HARNESS_IDS))

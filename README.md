@@ -1,8 +1,10 @@
-# Auto Pilot 4 Agents
+# Auto Pilot 4 Agents Unlocked
 
-Write a prompt now and send it later to a Claude Code, OpenCode, Codex, Gemini CLI, Cursor Agent or Pi session: in a few minutes, at a clock time, or right after a usage limit resets.
+Unlocked edition, with Auto and Full access levels. Write a prompt now and send it later to a Claude Code, OpenCode, Codex, Gemini CLI, Cursor Agent or Pi session: in a few minutes, at a clock time, or right after a usage limit resets.
 
-Each job runs headless in a transient systemd user timer, so it fires while the screen is locked and while the panel is closed. Auto Pilot shows the exact command before it arms anything, and afterwards it tells you what happened. Cursor Agent and Pi run in Plan only (see [Cursor Agent and Pi](#cursor-agent-and-pi)).
+> **This is not the marketplace edition.** It adds two levels that pass each agent's own automatic-approval or permission-bypass flags. **Auto** lets the agent's automatic review approve actions. **Full access** turns permission checks off, so a job can edit files, run any command and reach the network with nobody watching. Arm them only for folders and sessions you would hand to that agent unattended. The marketplace edition, with Plan and Unattended only, is the `main` branch of this repository.
+
+Each job runs headless in a transient systemd user timer, so it fires while the screen is locked and while the panel is closed. Auto Pilot shows the exact command before it arms anything, and afterwards it tells you what happened. Cursor Agent runs in Plan or Full access, and Pi in Plan, Auto or Full access (see [Cursor Agent and Pi](#cursor-agent-and-pi)).
 
 ## What it does
 
@@ -14,19 +16,24 @@ Each job runs headless in a transient systemd user timer, so it fires while the 
 
 ## Install
 
-Auto Pilot runs as an Omarchy Quattro shell plugin with a background service and a bar widget. No sudo or pkexec is required.
+Auto Pilot Unlocked runs as an Omarchy Quattro shell plugin with a background service and a bar widget. No sudo or pkexec is required. It installs beside the marketplace edition: it has its own plugin id, timers, state folder and bar widget.
+
+`omarchy plugin add` installs a repository's default branch, which is the marketplace edition, so install this one from the `unlocked` branch:
 
 ```
-omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git --enable
+git clone -b unlocked https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git auto-pilot4agents-unlocked
+cd auto-pilot4agents-unlocked
+./dev-sync.sh
+omarchy plugin enable oliwier.auto-pilot4agents-unlocked
 ```
 
-If the bar does not pick it up:
+`dev-sync.sh` copies the plugin into `~/.config/omarchy/plugins/oliwier.auto-pilot4agents-unlocked`, validates it and asks the shell to rescan. Run it again after `git pull`. If the bar does not pick it up:
 
 ```
 omarchy restart shell
 ```
 
-The widget is listed as **Auto Pilot** in the bar's widget settings.
+The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
 
 ## Dependencies
 
@@ -149,7 +156,9 @@ The list is kept for 6 hours and `Ctrl+R` reads it again. **Agent default** leav
 
 ## Permission levels
 
-There are exactly two levels. The helper refuses any other value, whether it comes from the panel, the job store or IPC.
+There are exactly four levels. The helper refuses any other value, whether it comes from the panel, the job store or IPC. Plan stays the default. In the panel, Unattended and Auto are amber and Full access is red.
+
+**Plan and Unattended**
 
 | Agent | Plan (default) | Unattended |
 |---|---|---|
@@ -157,32 +166,44 @@ There are exactly two levels. The helper refuses any other value, whether it com
 | OpenCode | Built-in plan agent without plugins. Edits, shell, web and subagents are denied. | Edits, shell, web and subagents would ask, so they are rejected. Reads still work. |
 | Codex | Read-only sandbox. Codex can read files but cannot write or reach the network. | Workspace-write sandbox. Codex can edit inside the working folder. Network stays off. |
 | Gemini CLI | Plan mode. Gemini reads and plans. It does not edit files or run commands. | Default approval. Tools that would ask are denied. |
-| Cursor Agent | Ask mode in Cursor's read-only sandbox. Cursor reads and answers. File edits are never applied and commands can only read. | Not offered. Cursor applies file edits headless only with --force, which Auto Pilot never passes. |
-| Pi | Pi runs read-only here: read, grep, find and ls. It cannot edit files or run commands. | Not offered. Pi has no approval prompts, so only Plan is offered. |
+| Cursor Agent | Ask mode. Cursor reads and answers, and anything that would need your approval is denied, so no file is edited. | Not offered. Cursor applies file edits headless only with `--force`. Pick Full access for that. |
+| Pi | Pi runs read-only here: read, grep, find and ls. It cannot edit files or run commands. | Not offered. Pi has no approval prompts. Auto lets it edit files, and Full access adds bash. |
 
-Unattended never widens what an agent may do. A job only does what the agent's own configuration already allows without asking, because nobody is there to answer a prompt.
+**Auto and Full access**
+
+| Agent | Auto | Full access |
+|---|---|---|
+| Claude Code | Auto mode. Claude's classifier approves actions it judges safe and blocks risky ones. Nothing asks you. | Bypass permissions. Claude edits files and runs any command without asking. |
+| OpenCode | Edits, web and subagents run. Shell commands would ask, so they are rejected. | Every permission is allowed, shell, web and folders outside the working folder included. |
+| Codex | Automatic review in the workspace-write sandbox. A reviewer approves or denies what would ask. | No approvals and no sandbox. Codex runs any command with your user's access. |
+| Gemini CLI | Auto edit. File edits are approved. Shell commands would ask, so they are denied. | YOLO mode. Every tool call is approved, shell commands included. |
+| Cursor Agent | Not offered. Cursor has no automatic review of its own. | Force mode, workspace trusted, sandbox off. Cursor applies edits and runs commands without asking. |
+| Pi | Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands. | Every built-in tool: read, bash, edit, write, grep, find and ls. |
+
+Plan and Unattended never widen what an agent may do: a job only does what the agent's own configuration already allows without asking. Auto hands each decision to the agent's own automatic review, which can be wrong. Full access has no checks at all, and the job runs with your user's access to your files, your shell and the network. The systemd limits under [The timer](#the-timer) still apply, and the prompt still travels only on standard input.
 
 The exact flags for each level are listed under [Permission flags](#permission-flags). For Claude the runner also reads the permission mode Claude reports when it starts. If it is not the requested one, the run is stopped at once and marked failed.
 
 ## Cursor Agent and Pi
 
-Both run in Plan only.
+Cursor Agent runs in Plan or Full access. Pi runs in Plan, Auto or Full access.
 
 ### Cursor Agent
 
-- **Why Plan only.** Headless Cursor applies file edits only with a flag that approves every tool, which Auto Pilot never passes. Plan uses Cursor's ask mode, where every tool that would ask for your approval is denied.
+- **Why Plan or Full access.** Headless Cursor applies file edits only with `--force`, which approves every tool, so editing is Full access only. Plan uses Cursor's ask mode, where every tool that would ask for your approval is denied.
 - **No sandbox flag.** Cursor's own sandbox needs privileges the job's systemd unit denies, so asking for it would only make the job fail. If your Cursor config turns it on, the job stops with that reason instead of retrying.
 - **Checked once, then on.** A supervised Cursor run in a folder Cursor already trusts confirmed that the Plan command takes the prompt on stdin and applies no edits, so Cursor jobs arm like every other agent.
-- **Before it arms and before it fires**, Auto Pilot refuses a job when:
+- **Before it arms and before it fires**, Auto Pilot refuses a Plan job when:
   - Cursor is set to Run Everything, which would approve every tool
   - Cursor's sandbox allows all network access
   - the folder or a parent up to its git root has its own `.cursor/cli.json`, or `.claude/settings.json` in the git root has allow rules, which Cursor would apply
-  - Cursor does not trust the folder yet. Open `cursor-agent` in that folder once and choose Trust this workspace. Auto Pilot never marks a folder as trusted for you.
+  - Cursor does not trust the folder yet. Open `cursor-agent` in that folder once and choose Trust this workspace. A Plan job never marks a folder as trusted for you.
+- **Full access skips those checks.** It already approves every tool and passes `--trust`, which trusts the job's folder without asking.
 - **Sessions.** Only chats that Auto Pilot itself started can be resumed, and Cursor chats cannot be forked.
 
 ### Pi
 
-- **Why Plan only.** Pi has no approval prompts: a tool it may use runs without asking. Plan gives it only the read, grep, find and ls tools, without extensions, skills, prompt templates or themes, offline.
+- **Levels.** Pi has no approval prompts: a tool it may use runs without asking, so each level is a tool list. Plan gives it read, grep, find and ls. Auto adds edit and write. Full access adds bash. Every level runs without extensions, skills, prompt templates or themes, offline.
 - **Provider and model.** Every Pi job needs both. Pick them in the model picker.
 - **Sign-in check.** `pi auth check` confirms the sign-in for that provider before arming and again before firing.
 - **Slash prompts.** A prompt that starts with `/` is refused, because Pi reads it as a command. Start it with a word.
@@ -290,15 +311,15 @@ Settings hold the default agent and level, paid usage for new jobs, the limits i
 The widget answers IPC, which is handy for a keybinding. No IPC method takes prompt text.
 
 ```
-qs ipc -p /usr/share/omarchy/shell call oliwier.auto-pilot4agents compose
+qs ipc -p /usr/share/omarchy/shell call oliwier.auto-pilot4agents-unlocked compose
 ```
 
 The methods are `open`, `close`, `toggle`, `compose`, `queue` and `history`. `show` and `hide` are aliases for `open` and `close`.
 
 ## How it works
 
-1. **Arm.** The helper checks the job and stores it in `~/.local/state/omarchy/auto-pilot4agents/jobs.json`, with the prompt in `prompts/<job id>.txt`. Both files and the folder are private to you (0600 and 0700). A relative time such as "in 2 hours" becomes a fixed clock time at this moment, so suspending the computer does not stretch it.
-2. **Timer.** It creates one transient systemd user timer for the job, named `ap4a-<job id>-g<generation>`, set to that exact second. The timer's own service is the runner. Nothing is written to your systemd configuration.
+1. **Arm.** The helper checks the job and stores it in `~/.local/state/omarchy/auto-pilot4agents-unlocked/jobs.json`, with the prompt in `prompts/<job id>.txt`. Both files and the folder are private to you (0600 and 0700). A relative time such as "in 2 hours" becomes a fixed clock time at this moment, so suspending the computer does not stretch it.
+2. **Timer.** It creates one transient systemd user timer for the job, named `ap4u-<job id>-g<generation>`, set to that exact second. The timer's own service is the runner. Nothing is written to your systemd configuration.
 3. **Fire.** At that second the runner checks everything again:
    - the plugin is still installed and enabled
    - the kill switch is absent
@@ -364,23 +385,36 @@ The level becomes exactly these flags and variables:
 ```
 Claude Code   plan         --permission-mode plan --permission-prompts none
               unattended   --permission-mode dontAsk --permission-prompts none
+              auto         --permission-mode auto --permission-prompts none
+              full         --permission-mode bypassPermissions --permission-prompts none
 
 OpenCode      plan         --pure --agent plan
                            OPENCODE_PERMISSION={"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny","doom_loop":"deny"}
               unattended   OPENCODE_PERMISSION={"edit":"ask","bash":"ask","webfetch":"ask","websearch":"ask","task":"ask","external_directory":"deny","doom_loop":"deny"}
+              auto         OPENCODE_PERMISSION={"edit":"allow","bash":"ask","webfetch":"allow","websearch":"allow","task":"allow","external_directory":"deny","doom_loop":"deny"}
+              full         --auto
+                           OPENCODE_PERMISSION={"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow","task":"allow","external_directory":"allow","doom_loop":"allow"}
 
 Codex         plan         -s read-only
               unattended   -s workspace-write
+              auto         --approve-for-me
+              full         --dangerously-bypass-approvals-and-sandbox
 
 Gemini CLI    plan         --approval-mode plan
               unattended   --approval-mode default
+              auto         --approval-mode auto_edit
+              full         --approval-mode yolo
 
-Cursor Agent  plan         --mode ask --sandbox enabled
+Cursor Agent  plan         --mode ask
               unattended   not offered
+              auto         not offered
+              full         --force --trust --sandbox disabled
 
 Pi            plan         --offline --no-extensions --no-skills --no-prompt-templates --no-themes --no-approve --tools read,grep,find,ls
                            PI_OFFLINE=1 PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1
               unattended   not offered
+              auto         the plan flags with --tools read,grep,find,ls,edit,write
+              full         the plan flags with --tools read,bash,edit,write,grep,find,ls
 ```
 
 ### The timer
@@ -388,12 +422,12 @@ Pi            plan         --offline --no-extensions --no-skills --no-prompt-tem
 Arming runs exactly this, with the calendar options left out for Run now:
 
 ```
-/usr/bin/systemd-run --user --quiet --no-ask-password --collect --unit=ap4a-<job id>-g<n> --description="Auto Pilot job"
+/usr/bin/systemd-run --user --quiet --no-ask-password --collect --unit=ap4u-<job id>-g<n> --description="Auto Pilot Unlocked job"
     --on-calendar=@<epoch> --timer-property=AccuracySec=1s
     -p Type=exec -p RuntimeMaxSec=<runtime> -p TimeoutStopSec=30s -p KillMode=control-group -p SendSIGKILL=yes
     -p MemoryHigh=3G -p MemoryMax=4G -p TasksMax=512 -p CPUWeight=50 -p OOMPolicy=kill -p Nice=10
     -p IOSchedulingClass=best-effort -p IOSchedulingPriority=7 -p NoNewPrivileges=yes -p UMask=0077 -p LimitCORE=0
-    -p StandardInput=null -p StandardOutput=null -p StandardError=journal -p SyslogIdentifier=ap4a
+    -p StandardInput=null -p StandardOutput=null -p StandardError=journal -p SyslogIdentifier=ap4u
     -p LogRateLimitIntervalSec=30s -p LogRateLimitBurst=200 -E PATH=/usr/bin -E LANG=C.UTF-8
     -p "UnsetEnvironment=DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE OMARCHY_PATH"
     -- /usr/bin/python3 -I -S -B <plugin folder>/bin/ap4a run --job <job id> --gen <n>
@@ -405,7 +439,7 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 
 ### Guarantees
 
-- No automatic-approval or permission-bypass flag is ever passed.
+- Plan and Unattended pass no automatic-approval or permission-bypass flag. Auto and Full access pass exactly the flags listed under [Permission flags](#permission-flags), and only for a job you armed at that level.
 - The prompt travels only on standard input: from the panel to the helper, and from the stored file to the agent. It never appears in a command line, an environment variable, a unit property, the journal or a notification. Lines in which an agent echoes the prompt back are left out of the run log.
 - A job you do not name is labelled from its agent and folder (for example "Claude Code in myproject"), never from the prompt.
 - The prompt file is deleted when the job reaches a final state.
@@ -416,7 +450,7 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused.
 - A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot` and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
 - The system tools it calls (`systemd-run`, `systemctl`, `busctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
-- Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, never marks a folder as trusted, and makes no network requests of its own.
+- Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
 
 ### What it reads, and what it never opens
 
@@ -447,9 +481,10 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 - **Missed jobs.** They stay in the Queue marked missed, with Run now, for 24 hours. After that their stored prompt is deleted and they move to History, where Edit and re-arm asks you to write the prompt again.
 - **Codex.** It stays disabled in the panel until `codex login status` reports a signed-in account. Its chip carries a warning glyph; choosing it opens a sign-in popup with the exact command to run, `codex login`, and a **Check again** button.
 - **Gemini CLI.** Its sign-in cannot be checked without a run, so its chip carries the same warning glyph until the first job ends, and its sign-in popup says to run `gemini` once and pick a sign-in there. Gemini refuses to work in a folder it does not trust yet, so trust the folder in Gemini first. Gemini sessions cannot be forked.
-- **Cursor Agent.** Only Plan is offered, chats cannot be forked, and a monthly limit ends the job without a retry. Cursor has to trust the folder first. On-demand usage is a Cursor account setting that Auto Pilot cannot switch off.
-- **Pi.** Only Plan is offered, every job needs a provider and a model, and Pi reports a finished run even when the provider failed, so Auto Pilot judges the run by Pi's last answer rather than its exit code.
-- **Editing files with Claude.** There is no file-editing level. An unattended Claude job edits files only where your own Claude permission rules already allow it.
+- **Cursor Agent.** Only Plan and Full access are offered, chats cannot be forked, and a monthly limit ends the job without a retry. Cursor has to trust the folder first. On-demand usage is a Cursor account setting that Auto Pilot cannot switch off.
+- **Pi.** Unattended is not offered, every job needs a provider and a model, and Pi reports a finished run even when the provider failed, so Auto Pilot judges the run by Pi's last answer rather than its exit code.
+- **Editing files with Claude.** An Unattended Claude job edits files only where your own Claude permission rules already allow it. Auto and Full access edit without asking.
+- **Auto and Full access are unverified live.** Their flags come from each agent's own `--help`. The helper and panel tests cover the commands they build, but no scheduled run at these levels has been watched end to end yet.
 - **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal.
 - **Resuming.** A job that resumes a session adds its turns to that session. Fork the session if you want the original left untouched.
 - **Budget.** `--max-budget-usd` is Claude's own estimate and is used only with paid usage on. The turn limit and the runtime limit are the hard caps.
@@ -460,7 +495,7 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 1. Cancel every job first. This disarms all jobs and stops every timer and running job this plugin created, including leftovers. **Cancel all jobs** in the panel's settings does the same.
 
    ```
-   /usr/bin/python3 -I -S -B ~/.config/omarchy/plugins/oliwier.auto-pilot4agents/bin/ap4a cancel-all
+   /usr/bin/python3 -I -S -B ~/.config/omarchy/plugins/oliwier.auto-pilot4agents-unlocked/bin/ap4a cancel-all
    ```
 
    If its answer says the stop could not be confirmed, run it again.
@@ -468,16 +503,16 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 2. Remove the plugin:
 
    ```
-   omarchy plugin remove oliwier.auto-pilot4agents
+   omarchy plugin remove oliwier.auto-pilot4agents-unlocked
    ```
 
-3. Optionally delete its data: `~/.local/state/omarchy/auto-pilot4agents` (jobs, stored prompts, run logs, model lists and the limits history) and `~/.config/omarchy/auto-pilot4agents`.
+3. Optionally delete its data: `~/.local/state/omarchy/auto-pilot4agents-unlocked` (jobs, stored prompts, run logs, model lists and the limits history) and `~/.config/omarchy/auto-pilot4agents-unlocked`.
 
 A job can never fire into a removed or disabled plugin. If step 1 is skipped, a timer that fires afterwards finds the plugin gone or disabled, does not start the agent, and marks the job paused.
 
 ### Pause without removing
 
-Create the kill switch file `~/.config/omarchy/auto-pilot4agents/DISABLED`. While it exists no job fires and nothing can be armed, and `cancel-all` still works. Delete the file to switch Auto Pilot back on.
+Create the kill switch file `~/.config/omarchy/auto-pilot4agents-unlocked/DISABLED`. While it exists no job fires and nothing can be armed, and `cancel-all` still works. Delete the file to switch Auto Pilot Unlocked back on.
 
 ## Development
 

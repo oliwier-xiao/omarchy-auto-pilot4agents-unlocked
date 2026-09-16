@@ -16,7 +16,16 @@ reach the run log).
 import json
 import re
 
-from . import consts, fsio, trigger
+from . import consts, edition, fsio, trigger
+
+
+def _pi_tools(level_id):
+    """The tools Pi may start at a level: the --tools list of that level's argv, else the Plan tools."""
+    entry = edition.level(level_id)
+    argv = entry["harness"].get("pi", {}).get("argv", []) if entry else []
+    if "--tools" in argv and argv.index("--tools") + 1 < len(argv):
+        return tuple(argv[argv.index("--tools") + 1].split(","))
+    return consts.PI_TOOLS
 
 _TEXT_KEEP = 8
 _TEXT_MAX = 512
@@ -392,7 +401,8 @@ def _feed_pi(state, obj):
                                     "errorMessage": error[:_ERROR_MESSAGE_MAX] if isinstance(error, str) else None}
         return None
     if kind == "tool_execution_start":
-        if obj.get("toolName") not in consts.PI_TOOLS:
+        # A tool outside the level's own list means Pi ignored --tools: stop it.
+        if obj.get("toolName") not in _pi_tools(state.get("levelId")):
             return _kill(state, "tool_violation")
         return None
     if kind == "auto_retry_end":

@@ -474,7 +474,9 @@ Item {
                   pill: settingRow.modelData === "defaultHarness"
                   harness: typeof choiceChip.modelData.harness === "string" ? choiceChip.modelData.harness : ""
                   text: choiceChip.modelData.label
-                  tint: (settingRow.modelData === "defaultLevel" && choiceChip.modelData.value === "unattended")
+                  tint: settingRow.modelData === "defaultLevel" && Edition.LEVEL_TONES[choiceChip.modelData.value] === "bad"
+                    ? root.theme.badInk
+                    : (settingRow.modelData === "defaultLevel" && Edition.LEVEL_TONES[choiceChip.modelData.value] === "warn")
                     || (settingRow.modelData === "defaultAllowPaid" && choiceChip.modelData.value === true)
                     ? root.theme.warnInk : (choiceChip.harness !== "" ? root.theme.harnessInk(choiceChip.harness) : root.theme.accent)
                   selected: root.choiceValue(settingRow.modelData) === choiceChip.modelData.value

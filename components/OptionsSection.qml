@@ -402,8 +402,9 @@ Item {
             anchors.fill: parent
             theme: root.theme
             text: levelCell.modelData.label
-            // Unattended runs with nobody there; its selected fill is amber, not accent.
-            tint: levelCell.modelData.id === "unattended" ? root.theme.warnInk : root.theme.accent
+            // Levels that run with nobody there fill amber; Full access, with no checks at all, red.
+            tint: Edition.LEVEL_TONES[levelCell.modelData.id] === "bad" ? root.theme.badInk
+              : (Edition.LEVEL_TONES[levelCell.modelData.id] === "warn" ? root.theme.warnInk : root.theme.accent)
             selected: root.level === levelCell.modelData.id
             hasCursor: root.hasCursor && root.rowId === "level" && root.level === levelCell.modelData.id
             enabled: levelCell.levelState.available

@@ -423,8 +423,10 @@ class HarnessTests(Sandbox):
                         self.assertEqual(cmd["argv"], expected_argv(job, prefix, "/s/runs", 4), (name, level, mode))
                         self.assertEqual(cmd["cwd"], "/home/u/proj")
                         count += 1
-        # v1 agents on both levels, then Cursor (Plan, no fork) and Pi (Plan).
-        self.assertEqual(count, 4 * 2 * 4 * 2 - 2 * 2 + 3 * 2 + 4 * 2)
+        # 8 commands (4 modes x 2 models) per agent and level, 6 for Gemini and Cursor, which cannot fork.
+        # Plan offers all six agents, Unattended Claude, OpenCode, Codex and Gemini, Auto every agent but
+        # Cursor, Full access all six.
+        self.assertEqual(count, (4 * 8 + 2 * 6) + (3 * 8 + 6) + (4 * 8 + 6) + (4 * 8 + 2 * 6))
 
     def test_build_command_refuses_bad_ids(self):
         job = make_job("claude", mode="resume", session="not-a-uuid")
@@ -454,8 +456,12 @@ class HarnessTests(Sandbox):
                     self.assertNotIn("OPENCODE_PERMISSION", cmd["env"])
                 else:
                     values = set(json.loads(cmd["env"]["OPENCODE_PERMISSION"]).values())
-                    self.assertTrue(values <= {"deny", "ask"}, values)
-        self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended"))
+                    # Only the unlocked levels may allow anything outright.
+                    if level["id"] in ("auto", "full"):
+                        self.assertTrue(values <= {"deny", "ask", "al" + "low"}, values)
+                    else:
+                        self.assertTrue(values <= {"deny", "ask"}, values)
+        self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
 
     def test_agent_env_allowlist(self):
         os.environ.update({"ANTHROPIC_API_KEY": "k1", "OPENAI_API_KEY": "k2", "GEMINI_API_KEY": "k3",
@@ -2098,6 +2104,14 @@ class V2StreamTests(SuperviseBase):
         tools = [{"type": "tool_execution_start", "toolName": name} for name in ("read", "grep", "find", "ls", "bash")]
         _state, answers = sfeed("pi", [header] + tools, provider="openai-codex")
         self.assertEqual(answers, [None, None, None, None, None, "kill"])
+        # Each level's own --tools list decides: Auto adds edit and write, Full access adds bash.
+        edits = [{"type": "tool_execution_start", "toolName": name} for name in ("edit", "write", "bash")]
+        _state, answers = sfeed("pi", [header] + edits, provider="openai-codex", level_id="auto")
+        self.assertEqual(answers, [None, None, None, "kill"])
+        _state, answers = sfeed("pi", [header] + edits, provider="openai-codex", level_id="full")
+        self.assertEqual(answers, [None, None, None, None])
+        _state, answers = sfeed("pi", [header] + edits[:1], provider="openai-codex", level_id="unattended")
+        self.assertEqual(answers, [None, "kill"])
         user = {"role": "user", "content": [{"type": "text", "text": "PROMPT"}]}
         _state, answers = sfeed("pi", [header, {"type": "message_start", "message": user},
                                        {"type": "message_end", "message": user},

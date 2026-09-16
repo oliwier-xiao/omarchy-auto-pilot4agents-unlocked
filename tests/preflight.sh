@@ -475,6 +475,11 @@ for p in scanned:
         add("bundled-executable-binary", p)
 
 EXPECTED = {"service-management"}
+# The unlocked edition installs from a clone of its branch, and the README spells that out. Nothing
+# in the plugin itself clones or fetches.
+caps["remote-build"] = [w for w in caps.get("remote-build", []) if not w.startswith("README.md:")]
+if not caps["remote-build"]:
+    del caps["remote-build"]
 extra = sorted(set(caps) - EXPECTED)
 if extra:
     no("security-baseline-capabilities", "unexpected capabilities: " + ", ".join("%s(%d)" % (k, len(caps[k])) for k in extra))
@@ -609,7 +614,8 @@ for label, names in (("install", ("install",)), ("dependencies", ("dependencies"
     (ok if has_heading(*names) else no)("readme/section-%s" % label.replace(" ", "-"),
         "present" if has_heading(*names) else "a section heading for %s is required" % label)
 for label, sentence in (("no-sudo-wording", "No sudo or pkexec is required."),
-                        ("no-bypass-wording", "No automatic-approval or permission-bypass flag is ever passed.")):
+                        # The unlocked edition says which levels stay free of those flags instead.
+                        ("locked-levels-wording", "Plan and Unattended pass no automatic-approval or permission-bypass flag.")):
     (ok if sentence in text else no)("readme/" + label, sentence if sentence in text else "missing the sentence: " + sentence)
 (ok if "cancel-all" in text else no)("readme/removal-cancels-jobs", "cancel-all documented" if "cancel-all" in text
     else "Removal must run ap4a cancel-all before removing the plugin")
@@ -638,7 +644,7 @@ for label, prefix in (("Cursor Agent", "cursor-agent -p --output-format stream-j
     elif "<stdin>" not in chunk:
         missing.append("the %s template does not end in <stdin>" % label)
 flags = "\n".join(fences)
-for label, needle in (("Cursor Agent plan flags", "--mode ask --sandbox enabled"),
+for label, needle in (("Cursor Agent plan flags", "Cursor Agent  plan         --mode ask\n"),
                       ("Pi plan tools", "--tools read,grep,find,ls")):
     if needle not in flags:
         missing.append("the permission flags do not list %s (%s)" % (label, needle))

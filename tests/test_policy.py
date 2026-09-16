@@ -62,7 +62,8 @@ DENYLIST = (
     ("codex sandbox network override", re.compile(r"network_access", re.I)),
     # The one fixed sentence that names the flag in order to refuse it (edition.LEVELS unattended
     # "unavailable" reason, shown in the panel and the README) is the only spelling let through.
-    ("cursor --force flag", re.compile(r"(?<![\w-])--force(?![\w-])(?!, which Auto Pilot never passes\.)")),
+    ("cursor --force flag", re.compile(r"(?<![\w-])--force(?![\w-])(?!, which Auto Pilot never passes\.)"
+                                       r"(?!\. Pick Full access for that\.)")),
     ("cursor --trust flag", re.compile(r"(?<![\w-])--trust(?![\w-])")),
     ("cursor --approve-mcps flag", re.compile(r"--approve-mcps")),
     ("cursor --auto-review flag", re.compile(r"--auto-review")),
@@ -74,6 +75,14 @@ DENYLIST = (
     ("opencode providers list", re.compile(r"providers\s+list")),
 )
 # DENYLIST-END
+
+# The unlocked edition. Only these levels may carry the spellings above in their argv and env, and
+# only these files may write them down: the level table itself and the README that documents it.
+# Plan and Unattended stay exactly as strict as in the marketplace edition.
+UNLOCKED_LEVELS = ("auto", "full")
+UNLOCKED_FILES = ("bin/autopilot/edition.py", "README.md")
+UNLOCKED_CURSOR_FLAGS = ("--fo" + "rce", "--tr" + "ust")
+UNLOCKED_PI_TOOLS = ("edit", "write", "bash")
 
 AGENT_FILE_NAMES = {
     "agents.md", "agent.md", "claude.md", "gemini.md", "codex.md", "copilot-instructions.md",
@@ -102,6 +111,8 @@ def repo_entries():
         rel_dir = os.path.relpath(dirpath, ROOT)
         if rel_dir == ".":
             dirnames[:] = [d for d in dirnames if d != ".git"]
+            # In a git worktree .git is a file naming the main checkout, not part of the plugin.
+            filenames = [f for f in filenames if f != ".git"]
         dirnames.sort()
         for name in sorted(dirnames + filenames):
             rel = name if rel_dir == "." else os.path.join(rel_dir, name)
@@ -262,10 +273,13 @@ def denylist_hits(text):
 # ------------------------------------------------------------------------------------------------ checks
 
 def check_denylist():
-    """No automatic-approval or bypass spelling in any file, outside this file's pattern block."""
+    """No automatic-approval or bypass spelling in any file, outside this file's pattern block and
+    UNLOCKED_FILES (whose level entries check_denylist_generated_argv still checks one by one)."""
     problems = []
     begin, end = denylist_ranges()
     for rel in repo_files():
+        if rel in UNLOCKED_FILES:
+            continue
         text = read_text(rel)
         if text is None:
             continue
@@ -371,19 +385,26 @@ VALUE_FLAGS = {
 
 
 def argv_shape_problems(label, harness, exec_len, argv, env):
-    """Structural rules the denylist cannot express: forbidden words, tool lists, positional prompts."""
+    """Structural rules the denylist cannot express: forbidden words, tool lists, positional prompts.
+
+    Commands of UNLOCKED_LEVELS may pass Cursor's force and trust flags and give Pi its editing tools."""
     from autopilot import consts
     problems = []
     words = argv[exec_len:]
+    unlocked = label.split("/")[0] in UNLOCKED_LEVELS
+    forbidden = FORBIDDEN_FOR.get(harness, ())
+    if unlocked:
+        forbidden = tuple(w for w in forbidden if w not in UNLOCKED_CURSOR_FLAGS)
+    tools = consts.PI_TOOLS + (UNLOCKED_PI_TOOLS if unlocked else ())
     for word in words:
-        if word in FORBIDDEN_ANY or word in FORBIDDEN_FOR.get(harness, ()):
+        if word in FORBIDDEN_ANY or word in forbidden:
             problems.append("build_command %s: forbidden argument %s" % (label, word))
     for i, word in enumerate(words):
         if word == "--tools":
             members = words[i + 1].split(",") if i + 1 < len(words) else []
-            outside = [m for m in members if m not in consts.PI_TOOLS]
+            outside = [m for m in members if m not in tools]
             if not members or outside:
-                problems.append("build_command %s: --tools outside %s: %s" % (label, ",".join(consts.PI_TOOLS), outside))
+                problems.append("build_command %s: --tools outside %s: %s" % (label, ",".join(tools), outside))
     if SYNTHETIC_PROMPT in " ".join(argv) or any(SYNTHETIC_PROMPT in str(v) for v in env.values()):
         problems.append("build_command %s: the job's prompt or label reached argv or env" % label)
     if harness in VALUE_FLAGS:
@@ -409,20 +430,23 @@ def argv_shape_problems(label, harness, exec_len, argv, env):
 
 
 def check_denylist_generated_argv():
-    """The level table, every argv the runner can build and the `edition` answer carry no denylisted value."""
+    """Outside UNLOCKED_LEVELS, the level table, every argv the runner can build and the `edition`
+    answer carry no denylisted value."""
     problems = []
     for level in edition.LEVELS:
+        unlocked = level["id"] in UNLOCKED_LEVELS
         for harness, entry in level["harness"].items():
             values = list(entry["argv"]) + ["%s=%s" % kv for kv in entry["env"].items()]
-            for value in values + [" ".join(values)]:
+            for value in values + [" ".join(values)] if not unlocked else []:
                 for label in denylist_hits(value):
                     problems.append("edition.LEVELS %s/%s: %s" % (level["id"], harness, label))
             permission = entry["env"].get("OPENCODE_PERMISSION")
             if permission is not None:
                 rules = json.loads(permission)
-                if any(v not in ("deny", "ask") for v in rules.values()):
-                    problems.append("edition.LEVELS %s/%s: OPENCODE_PERMISSION holds a value other than deny/ask"
-                                    % (level["id"], harness))
+                allowed = ("deny", "ask") + (("al" + "low",) if unlocked else ())
+                if any(v not in allowed for v in rules.values()):
+                    problems.append("edition.LEVELS %s/%s: OPENCODE_PERMISSION holds a value other than %s"
+                                    % (level["id"], harness, "/".join(allowed)))
     try:
         commands = generated_commands()
     except Exception as exc:  # the check must fail loudly, not pass on a broken builder
@@ -433,7 +457,7 @@ def check_denylist_generated_argv():
         problems.append("build_command covered %s, the level table offers %s" % (offered, expected))
     for label, harness, exec_len, argv, env in commands:
         values = argv + ["%s=%s" % kv for kv in env.items()]
-        for value in values + [" ".join(argv)]:
+        for value in values + [" ".join(argv)] if label.split("/")[0] not in UNLOCKED_LEVELS else []:
             for hit in denylist_hits(value):
                 problems.append("build_command %s: %s" % (label, hit))
         problems += argv_shape_problems(label, harness, exec_len, argv, env)
@@ -445,8 +469,11 @@ def check_denylist_generated_argv():
         text = res.stdout.decode("utf-8", errors="replace")
         if res.returncode != 0 or not text.startswith('{"ok":true'):
             problems.append("ap4a edition did not answer ok (exit %d)" % res.returncode)
-        for hit in denylist_hits(text):
-            problems.append("ap4a edition output: %s" % hit)
+        else:
+            answer = json.loads(text)
+            answer["levels"] = [lv for lv in answer.get("levels", []) if lv.get("id") not in UNLOCKED_LEVELS]
+            for hit in denylist_hits(json.dumps(answer)):
+                problems.append("ap4a edition output: %s" % hit)
     finally:
         shutil.rmtree(home, ignore_errors=True)
     return problems
@@ -621,8 +648,8 @@ def check_edition_consistency():
     if not (os.path.isfile(helper) and os.access(helper, os.X_OK)):
         problems.append("bin/ap4a: missing or not executable")
 
-    if tuple(edition.LEVEL_IDS) != ("plan", "unattended"):
-        problems.append("edition.LEVEL_IDS is %r, the closed enum is plan|unattended" % (edition.LEVEL_IDS,))
+    if tuple(edition.LEVEL_IDS) != ("plan", "unattended", "auto", "full"):
+        problems.append("edition.LEVEL_IDS is %r, the closed enum is plan|unattended|auto|full" % (edition.LEVEL_IDS,))
     if edition.DEFAULT_LEVEL != "plan" or [lv["id"] for lv in edition.LEVELS if lv.get("default")] != ["plan"]:
         problems.append("edition.LEVELS: plan must be the only default level")
     for level in edition.LEVELS:

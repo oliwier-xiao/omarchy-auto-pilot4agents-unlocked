@@ -948,8 +948,9 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     if harness_id in h5_v2.const("GATED_HARNESSES"):
         code = "harness_gated"
 
-    # 2. Cursor preflights
-    if code is None and harness_id == "cursor":
+    # 2. Cursor preflights. They keep a lower level from being widened by the folder's own Cursor
+    # configuration. Full access already approves every tool and trusts the folder, so nothing is left to widen.
+    if code is None and harness_id == "cursor" and job.get("level") != "full":
         code = cursor_preflight(cwd, home, cursor_env(home))
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)

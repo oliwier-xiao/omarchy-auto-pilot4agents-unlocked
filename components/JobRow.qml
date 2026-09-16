@@ -460,9 +460,11 @@ Item {
       height: Style.space(18)
       width: levelText.implicitWidth + Style.space(7) * 2
       radius: height / 2
-      readonly property bool unattended: !!root.job && root.job.level === "unattended"
-      readonly property color ink: levelChip.unattended ? root.theme.warnInk : root.theme.soft
-      color: levelChip.unattended ? Util.alpha(root.theme.warnInk, 0.12) : "transparent"
+      readonly property string tone: !!root.job ? (Edition.LEVEL_TONES[root.job.level] || "") : ""
+      readonly property bool loud: levelChip.tone === "warn" || levelChip.tone === "bad"
+      readonly property color ink: levelChip.tone === "bad" ? root.theme.badInk
+        : (levelChip.tone === "warn" ? root.theme.warnInk : root.theme.soft)
+      color: levelChip.loud ? Util.alpha(levelChip.ink, 0.12) : "transparent"
 
       Text {
         id: levelText

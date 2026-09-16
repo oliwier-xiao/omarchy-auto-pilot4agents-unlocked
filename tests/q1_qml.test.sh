@@ -324,8 +324,9 @@ lib_case drafts '
                                        { codex: { enabled: false }, claude: { enabled: true }, opencode: { enabled: true } })
       eq(d1, { harness: "claude", target: { mode: "new", sessionId: null, cwd: null, allowNonGit: false, sessionPath: null }, level: "unattended",
                limits: {}, model: null, allowPaid: false, provider: null, trigger: { kind: "now" }, prompt: "" })
-      eq(Model.draftFromSettings({ defaultHarness: "gemini", defaultLevel: "full" }, {}).harness, "gemini")
-      eq(Model.draftFromSettings({ defaultHarness: "gemini", defaultLevel: "full" }, {}).level, "plan")
+      eq(Model.draftFromSettings({ defaultHarness: "gemini", defaultLevel: "turbo" }, {}).harness, "gemini")
+      eq(Model.draftFromSettings({ defaultHarness: "gemini", defaultLevel: "turbo" }, {}).level, "plan")
+      eq(Model.draftFromSettings({ defaultHarness: "gemini", defaultLevel: "full" }, {}).level, "full")
       eq(Model.draftFromSettings(null, null).harness, "claude")
       eq(Model.draftFromSettings({ defaultHarness: "pi" }, {}).harness, "pi")
       eq(Model.draftFromSettings({ defaultHarness: "cursor" }, {}).harness, "cursor")
@@ -358,8 +359,9 @@ lib_case drafts '
         level: "plan", limits: {}, model: null, trigger: { kind: "claude_5h_reset", fireAt: 1789400000, delaySec: null, marginSec: 120 }, state: {} }
       var l1 = Model.draftFromJob(legacy, "", "rearm")
       eq([l1.trigger, l1.allowPaid, l1.provider, l1.target.sessionPath], [{ kind: "now" }, false, null, null])
-      eq(Edition.LEVEL_IDS, ["plan", "unattended"])
-      eq(Object.keys(Edition.LEVEL_LABELS), ["plan", "unattended"])
+      eq(Edition.LEVEL_IDS, ["plan", "unattended", "auto", "full"])
+      eq(Object.keys(Edition.LEVEL_LABELS), ["plan", "unattended", "auto", "full"])
+      eq(Edition.LEVEL_TONES, { plan: "accent", unattended: "warn", auto: "warn", full: "bad" })
       eq(Edition.HARNESS_IDS, ["claude", "opencode", "codex", "gemini", "cursor", "pi"])'
 run_case Lib_drafts.qml "drafts from settings and stored jobs (allowPaid, provider, sessionPath; a legacy OpenCode Claude reset starts over at now); six agents; level enum"
 
@@ -1109,7 +1111,7 @@ ShellRoot {
       sync = false
       root.waitFor(function () { return got !== null }, 3000, function (ok) {
         root.report("a change before ready answers not_ready, on a later turn",
-          ok && got.sync === false && got.res.code === "not_ready" && got.res.message === "Auto Pilot is still starting.",
+          ok && got.sync === false && got.res.code === "not_ready" && got.res.message === "Auto Pilot Unlocked is still starting.",
           JSON.stringify(got))
         next()
       })
