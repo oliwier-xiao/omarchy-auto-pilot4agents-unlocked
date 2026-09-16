@@ -84,7 +84,7 @@ The job waits in the Queue (`Ctrl+2`), the bar counts down to it, and a notifica
 |---|---|---|
 | Now | as soon as you press `Ctrl+Enter` a second time | all |
 | In | a number of minutes or hours after arming | all |
-| At | a clock time, up to 8 days ahead | all |
+| At | a clock time on any day up to 8 days ahead: pick the day in the day strip under the clock, or type the date | all |
 | At the Claude reset | when the current Claude 5-hour window ends, plus a buffer | Claude Code |
 | At the Codex reset | when the Codex usage window ends, plus a buffer | Codex, and Pi signed in with ChatGPT (`openai-codex`) |
 | At the Gemini reset | at the next daily quota reset (midnight in Los Angeles), plus a buffer | Gemini CLI |
@@ -243,11 +243,13 @@ The panel has three views, and every action has a key.
 | `Shift+J/K` | an hour earlier or later |
 | `Ctrl+J/K` | a day earlier or later |
 | `0-9` | type a time: `1405` then `Enter` is 14:05 |
+| `0-9` with `.` and a space | type a date, day first: `17.09 1830`, `17.09` (keeps the time shown) or `2026-09-17 18:30` |
+| `j/k` on the day strip | a day earlier or later |
 | `n` | now |
 | `r` | the agent's next reset |
-| `Left/Right`, `Enter` | move between the chips, use one |
+| `Left/Right`, `Enter` | move between the clock, the day strip and the chips, use one |
 
-Digits always type a time, so Now is on `n` rather than `0`.
+Digits always type a time or a date, so Now is on `n` rather than `0`. Clicking a day in the strip moves the job to that day and keeps its time.
 
 ### Queue
 
