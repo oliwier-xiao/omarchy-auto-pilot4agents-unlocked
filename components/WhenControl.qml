@@ -73,8 +73,8 @@ Item {
   // Keyboard stops, top to bottom and left to right: the two readout segments, the day
   // strip, then every chip.
   readonly property var stops: root.resetOffered
-    ? ["hour", "minute", "day", "now", "plus30", "plus60", "plus120", "plus300", "reset", "evening", "morning"]
-    : ["hour", "minute", "day", "now", "plus30", "plus60", "plus120", "plus300", "evening", "morning"]
+    ? ["hour", "minute", "day", "now", "minus60", "minus30", "plus30", "plus60", "plus120", "plus300", "reset", "evening", "morning"]
+    : ["hour", "minute", "day", "now", "minus60", "minus30", "plus30", "plus60", "plus120", "plus300", "evening", "morning"]
 
   // Today and every day the helper can still arm on (8 days ahead by default). Rebuilt
   // when the date changes, not on every tick of `nowMs`.
@@ -86,6 +86,11 @@ Item {
   onTodayKeyChanged: root.refreshDays()
   onDayCountChanged: root.refreshDays()
   Component.onCompleted: root.refreshDays()
+  // Steps back, laid out like a number line: Now, then earlier, then later.
+  readonly property var minusChips: [
+    { stop: "minus60", text: "\u22121h", minutes: -60 },
+    { stop: "minus30", text: "\u221230m", minutes: -30 }
+  ]
   readonly property var plusChips: [
     { stop: "plus30", text: "+30m", minutes: 30 },
     { stop: "plus60", text: "+1h", minutes: 60 },
@@ -234,10 +239,14 @@ Item {
   }
 
   // "+1h" adds to the time shown: a clock time moves, a delay grows, and a bound
-  // reset becomes the clock time it resolved to plus the step.
+  // reset becomes the clock time it resolved to plus the step. "-1h" takes it back.
   function addMinutes(minutes) {
     root._typed = ""
     var add = Math.round(Number(minutes)) * 60
+    if (add < 0) {
+      root.takeSeconds(-add)
+      return
+    }
     if (root.kind === "at" && typeof root.trigger.fireAt === "number") {
       root.setAt((root.trigger.fireAt + add) * 1000, "")
       return
@@ -248,6 +257,23 @@ Item {
     }
     var base = root.kind === "in" && typeof root.trigger.delaySec === "number" ? root.trigger.delaySec : 0
     root.setDelay(base + add)
+  }
+
+  // A step back that would land on or before the earliest time goes to Now rather than
+  // stopping a minute out, so stepping back after overshooting always gets home.
+  function takeSeconds(sec) {
+    if (root.kind === "now") return
+    if (root.kind === "in" && typeof root.trigger.delaySec === "number") {
+      var delay = root.trigger.delaySec - sec
+      if (delay < 60) root.setNow()
+      else root.setDelay(delay)
+      return
+    }
+    if (!isFinite(root.shownMs) || root.shownMs - sec * 1000 < root.earliestMs()) {
+      root.setNow()
+      return
+    }
+    root.setAt(root.shownMs - sec * 1000, root.bound ? "Unbound from reset." : "")
   }
 
   function bindReset() {
@@ -362,8 +388,9 @@ Item {
       return
     }
     if (stop === "now") { root.setNow(); return }
-    for (var i = 0; i < root.plusChips.length; i++) {
-      if (root.plusChips[i].stop === stop) { root.addMinutes(root.plusChips[i].minutes); return }
+    var steps = root.minusChips.concat(root.plusChips)
+    for (var i = 0; i < steps.length; i++) {
+      if (steps[i].stop === stop) { root.addMinutes(steps[i].minutes); return }
     }
     if (stop === "reset") { root.bindReset(); return }
     root._typed = ""
@@ -690,6 +717,26 @@ Item {
         hasCursor: root.hasCursor && root.cursorStop === "now"
         onHoveredChanged: if (nowChip.hovered && root.hasCursor) root.focusStop("now")
         onClicked: { root.focusRequested(); root.focusStop("now"); root.activate("now") }
+      }
+
+      Repeater {
+        model: root.minusChips
+
+        delegate: Chip {
+          id: minusChip
+          required property var modelData
+          theme: root.theme
+          text: minusChip.modelData.text
+          // Nothing comes before Now.
+          enabled: root.kind !== "now"
+          hasCursor: root.hasCursor && root.cursorStop === minusChip.modelData.stop
+          onHoveredChanged: if (minusChip.hovered && root.hasCursor) root.focusStop(minusChip.modelData.stop)
+          onClicked: {
+            root.focusRequested()
+            root.focusStop(minusChip.modelData.stop)
+            root.activate(minusChip.modelData.stop)
+          }
+        }
       }
 
       Repeater {
