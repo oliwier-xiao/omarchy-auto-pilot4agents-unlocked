@@ -83,7 +83,7 @@ The job waits in the Queue (`Ctrl+2`), the bar counts down to it, and a notifica
 | Trigger | Fires | Agents |
 |---|---|---|
 | Now | as soon as you press `Ctrl+Enter` a second time | all |
-| In | a number of minutes or hours after arming | all |
+| In | a number of minutes or hours after arming. `+30m` to `+5h` add to the time shown, `−30m` and `−1h` take it back, down to Now | all |
 | At | a clock time on any day up to 8 days ahead: pick the day in the day strip under the clock, or type the date | all |
 | At the Claude reset | when the current Claude 5-hour window ends, plus a buffer | Claude Code |
 | At the Codex reset | when the Codex usage window ends, plus a buffer | Codex, and Pi signed in with ChatGPT (`openai-codex`) |
