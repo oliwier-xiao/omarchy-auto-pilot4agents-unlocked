@@ -686,7 +686,7 @@ Item {
       root.press(Qt.Key_Tab)
       root.check(root.compose.section === 2, "Tab to When")
       // OpenCode without a model follows no reset, so the hints do not offer one.
-      root.check(panel.footerText === "j/k ±5m  ·  Shift+J/K ±1h  ·  n now  ·  Ctrl+J/K ±1 day  ·  0-9 type a time  ·  Tab next  ·  Ctrl+Enter run now  ·  Esc close",
+      root.check(panel.footerText === "j/k ±5m  ·  Shift+J/K ±1h  ·  n now  ·  Ctrl+J/K ±1 day  ·  0-9 type a time or a date  ·  Tab next  ·  Ctrl+Enter run now  ·  Esc close",
                  "When hints: " + panel.footerText)
       // The bound comes from the moment before the key, so a minute boundary that passes
       // between the nudge and this check cannot move it.
@@ -711,6 +711,35 @@ Item {
       root.press(Qt.Key_Return)
       t = root.compose.trigger
       root.check(t.kind === "at" && Model.formatClock(t.fireAt * 1000) === typedClock, "Enter sets " + typedClock)
+      // A typed date: two days from now at 18:30.
+      var inTwo = new Date()
+      inTwo.setDate(inTwo.getDate() + 2)
+      var dateTyped = inTwo.getDate() + "." + (inTwo.getMonth() + 1) + " 1830"
+      root.typeDigits(String(inTwo.getDate()))
+      root.press(Qt.Key_Period, 0, ".")
+      root.typeDigits(String(inTwo.getMonth() + 1))
+      root.press(Qt.Key_Space, 0, " ")
+      root.typeDigits("1830")
+      root.check(root.when.typingDate && root.when.readoutWord === dateTyped, "a typed date shows as typed: " + root.when.readoutWord)
+      root.press(Qt.Key_Return)
+      t = root.compose.trigger
+      root.check(t.kind === "at" && Model.dayKey(t.fireAt * 1000) === Model.dayKey(inTwo.getTime())
+                 && Model.formatClock(t.fireAt * 1000) === "18:30", "Enter sets the typed date and time")
+      // The day strip marks that day; picking another day keeps 18:30.
+      root.check(root.when.days.length === 9 && root.when.selectedDayKey === Model.dayKey(inTwo.getTime()), "the day strip marks the day")
+      root.press(Qt.Key_Right)
+      root.check(root.when.cursorStop === "day" && panel.footerText.indexOf("j/k ±1 day  ·  click a day") === 0, "the day stop and its hints: " + panel.footerText)
+      root.press(Qt.Key_J)
+      t = root.compose.trigger
+      root.check(Model.dayKey(t.fireAt * 1000) === root.when.days[1].key && Model.formatClock(t.fireAt * 1000) === "18:30", "j on the day stop: a day earlier")
+      root.when.setDay(root.when.days[5].ms)
+      t = root.compose.trigger
+      root.check(Model.dayKey(t.fireAt * 1000) === root.when.days[5].key && Model.formatClock(t.fireAt * 1000) === "18:30", "a day cell keeps the clock time")
+      root.press(Qt.Key_1, 0, "1"); root.press(Qt.Key_Period, 0, "."); root.press(Qt.Key_1, 0, "1"); root.press(Qt.Key_Period, 0, ".")
+      root.typeDigits("2020")
+      root.press(Qt.Key_Return)
+      root.check(root.when.captionText === "That date has passed." && Model.dayKey(root.compose.trigger.fireAt * 1000) === root.when.days[5].key,
+                 "a past date is refused and the time stays: " + root.when.captionText)
       root.press(Qt.Key_N)
       root.check(root.compose.trigger.kind === "now" && root.compose.isRunNow, "n: now")
       root.check(root.when.cursorStop === "now", "n moves the cursor to Now")

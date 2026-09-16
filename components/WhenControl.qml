@@ -13,7 +13,8 @@ import "../lib/Compose.js" as Compose
 // The control edits a Draft trigger (CONTRACT 4.4) and nothing else:
 //   now                       fires when armed
 //   in  + delaySec            "+30m" chips; the delay starts at arm time (D4)
-//   at  + fireAt              a clock time: typed, nudged, Tonight, Tomorrow
+//   at  + fireAt              a clock time: typed, nudged, Tonight, Tomorrow, or moved
+//                             to another day in the day strip or by a typed date
 //   <reset kind> + marginSec  bound to the agent's reset; nudging moves the buffer
 // The helper resolves the real epoch at arm and refuses anything it would not run;
 // the resolved line here is the same arithmetic on the same data, for the eye.
@@ -69,10 +70,22 @@ Item {
   readonly property double shownMs: root.msFor(root.trigger, root.reset, root.nowMs)
   readonly property color hue: root.bound ? root.theme.harnessInk(root.resetOwners[root.kind]) : root.theme.accent
 
-  // Keyboard stops, left to right: the two readout segments, then every chip.
+  // Keyboard stops, top to bottom and left to right: the two readout segments, the day
+  // strip, then every chip.
   readonly property var stops: root.resetOffered
-    ? ["hour", "minute", "now", "plus30", "plus60", "plus120", "plus300", "reset", "evening", "morning"]
-    : ["hour", "minute", "now", "plus30", "plus60", "plus120", "plus300", "evening", "morning"]
+    ? ["hour", "minute", "day", "now", "plus30", "plus60", "plus120", "plus300", "reset", "evening", "morning"]
+    : ["hour", "minute", "day", "now", "plus30", "plus60", "plus120", "plus300", "evening", "morning"]
+
+  // Today and every day the helper can still arm on (8 days ahead by default). Rebuilt
+  // when the date changes, not on every tick of `nowMs`.
+  readonly property int dayCount: Math.max(1, Math.floor(root.horizonSec / 86400) + 1)
+  readonly property string todayKey: Model.dayKey(root.nowMs)
+  property var days: []
+  readonly property string selectedDayKey: isFinite(root.shownMs) ? Model.dayKey(root.shownMs) : ""
+  function refreshDays() { root.days = Model.dayStrip(root.nowMs, root.dayCount) }
+  onTodayKeyChanged: root.refreshDays()
+  onDayCountChanged: root.refreshDays()
+  Component.onCompleted: root.refreshDays()
   readonly property var plusChips: [
     { stop: "plus30", text: "+30m", minutes: 30 },
     { stop: "plus60", text: "+1h", minutes: 60 },
@@ -89,9 +102,11 @@ Item {
   property real _wheel: 0
 
   readonly property string hints: {
-    if (root.typing) return "0-9 digits  ·  Enter set  ·  Backspace edit  ·  Esc cancel"
+    if (root.typing) return "0-9 digits  ·  . and a space for a date, 17.09 1830  ·  Enter set  ·  Backspace edit  ·  Esc cancel"
     var arm = root.armHint + "  ·  Esc close"
-    var keys = "n now  ·  " + (root.resetOffered ? "r reset  ·  " : "") + "Ctrl+J/K ±1 day  ·  0-9 type a time  ·  Tab next  ·  "
+    if (root.cursorStop === "day")
+      return "j/k ±1 day  ·  click a day  ·  0-9 type a date, 17.09 1830  ·  Tab next  ·  " + arm
+    var keys = "n now  ·  " + (root.resetOffered ? "r reset  ·  " : "") + "Ctrl+J/K ±1 day  ·  0-9 type a time or a date  ·  Tab next  ·  "
     if (root.bound) return "j/k buffer ±1m  ·  Shift+J/K ±1h  ·  " + keys + arm
     return "j/k ±5m  ·  Shift+J/K ±1h  ·  " + keys + arm
   }
@@ -122,9 +137,13 @@ Item {
 
   // ---------------------------------------------------------------- display
 
+  // Plain digits are a time; anything with a separator is shown as typed.
+  readonly property bool typingDate: root.typing && /[^0-9]/.test(root._typed)
+
   readonly property string readoutWord: {
     if (root.typing) {
       var t = root._typed
+      if (root.typingDate) return t
       return t.length <= 2 ? t + ":__" : t.slice(0, t.length - 2) + ":" + t.slice(t.length - 2)
     }
     if (root.kind === "now") return "Now"
@@ -134,7 +153,7 @@ Item {
   readonly property string clockText: isFinite(root.shownMs) ? Model.formatClock(root.shownMs) : "--:--"
 
   readonly property string resolvedText: {
-    if (root.typing) return "Enter sets the time"
+    if (root.typing) return root.typingDate ? "Enter sets the date" : "Enter sets the time"
     if (root.kind === "now") return "runs when you press Run now"
     if (!isFinite(root.shownMs)) return root.bound ? "no reset time known" : "no time set"
     return Model.resolvedLine(root.shownMs, root.nowMs)
@@ -305,14 +324,31 @@ Item {
     root.setAt(Model.nudgedDays(from, dir, 0), root.bound ? "Unbound from reset." : "")
   }
 
+  // The same clock time on another day. With nothing chosen yet (Now), today's clock is
+  // kept, and setAt moves a time already gone to the earliest one and says so.
+  function setDay(dayMs) {
+    root._typed = ""
+    var base = root.kind === "now" ? NaN : root.shownMs
+    root.setAt(Model.onDay(dayMs, base, root.nowMs), root.bound ? "Unbound from reset." : "")
+  }
+
   function commitTyping() {
     if (root._typed === "") return
     var typed = root._typed
     root._typed = ""
-    var parsed = Model.parseTyped(typed, root.nowMs)
+    var parsed = Model.parseTyped(typed, root.nowMs, root.kind === "now" ? NaN : root.shownMs)
     if (!parsed) {
-      root._note = "Type a time like 1405."
+      root._note = "Type a time like 1405, or a date like 17.09 1830."
       root._noteKind = "warn"
+      return
+    }
+    if (parsed.dated) {
+      if (parsed.rolled || Model.localMidnight(parsed.ms) < Model.localMidnight(root.nowMs)) {
+        root._note = "That date has passed."
+        root._noteKind = "warn"
+        return
+      }
+      root.setAt(parsed.ms, root.bound ? "Unbound from reset." : "")
       return
     }
     root.setAt(parsed.ms, parsed.rolled ? Model.formatClock(parsed.ms) + " has passed today. Set for tomorrow." : "")
@@ -321,7 +357,7 @@ Item {
   function cancelTyping() { root._typed = "" }
 
   function activate(stop) {
-    if (stop === "hour" || stop === "minute") {
+    if (stop === "hour" || stop === "minute" || stop === "day") {
       root.commitTyping()
       return
     }
@@ -359,9 +395,14 @@ Item {
     if ((mods & (Qt.AltModifier | Qt.MetaModifier)) !== 0) return false
     var text = String(event.text || "")
 
-    if (!ctrl && text.length === 1 && text >= "0" && text <= "9") {
+    var digit = text.length === 1 && text >= "0" && text <= "9"
+    // A separator continues what is being typed: "." or "/" for a date, "-" for a
+    // year-first date, ":" inside a time, a space before the time of a date.
+    var separator = root.typing && (text === "." || text === "/" || text === "-" || text === ":" || text === " ")
+    if (!ctrl && (digit || separator)) {
       root._note = ""
-      root._typed = root._typed.length >= 4 ? text : root._typed + text
+      if (digit && !root.typingDate && root._typed.length >= 4) root._typed = text
+      else if (root._typed.length < 16) root._typed = root._typed + text
       return true
     }
     if (root.typing) {
@@ -374,7 +415,7 @@ Item {
     var down = key === Qt.Key_Down || key === Qt.Key_J
     if (up || down) {
       var dir = up ? 1 : -1
-      if (ctrl) root.nudgeDays(dir)
+      if (ctrl || root.cursorStop === "day") root.nudgeDays(dir)
       else if (shift || root.cursorStop === "hour") root.nudge(60 * dir)
       else root.nudge(5 * dir)
       return true
@@ -410,7 +451,7 @@ Item {
     var n = Math.min(12, Math.abs(r.steps))
     for (var i = 0; i < n; i++) {
       var dir = r.steps > 0 ? 1 : -1
-      if (ctrl) root.nudgeDays(dir)
+      if (ctrl || root.cursorStop === "day") root.nudgeDays(dir)
       else if (shift || root.cursorStop === "hour") root.nudge(60 * dir)
       else root.nudge(5 * dir)
     }
@@ -552,6 +593,86 @@ Item {
 
           Behavior on color {
             ColorAnimation { duration: root.theme.fadeMs(160) }
+          }
+        }
+      }
+    }
+
+    // Every day the job can be set on, so the date is something you see and click rather
+    // than something you have to know to scroll. A click keeps the clock time shown.
+    Row {
+      id: dayRow
+      objectName: "dayStrip"
+      width: parent.width
+      spacing: Style.space(4)
+      readonly property int count: Math.max(1, root.days.length)
+      readonly property real cellWidth: Math.floor((width - spacing * (count - 1)) / count)
+      readonly property color ink: root.bound ? root.hue : root.theme.accentInk
+
+      Repeater {
+        model: root.days
+
+        delegate: Item {
+          id: dayCell
+          required property var modelData
+          readonly property bool selected: dayCell.modelData.key === root.selectedDayKey && root.kind !== "now"
+          readonly property bool cursorHere: root.hasCursor && root.cursorStop === "day"
+            && (dayCell.modelData.key === root.selectedDayKey || (root.selectedDayKey === "" && dayCell.modelData.offset === 0))
+          readonly property bool today: dayCell.modelData.offset === 0
+          width: dayRow.cellWidth
+          height: Style.space(40)
+
+          BorderSurface {
+            anchors.fill: parent
+            radius: Style.cornerRadius
+            color: dayCell.selected ? Util.alpha(root.hue, 0.24)
+              : Util.alpha(root.theme.fg, dayHover.hovered ? 0.10 : 0.04)
+            borderSpec: Border.controlSpec(dayCell.cursorHere ? "hover-cursor" : "normal", root.theme.fg, root.theme.accent)
+          }
+
+          Column {
+            anchors.centerIn: parent
+            spacing: 0
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              // The first of a month says which month it is; today says so.
+              text: dayCell.today ? "Today" : (dayCell.modelData.day === 1 ? dayCell.modelData.month : dayCell.modelData.weekday)
+              color: dayCell.selected ? dayRow.ink : root.theme.soft
+              font.family: root.theme.fontFamily
+              font.pixelSize: root.theme.type.meta
+              font.bold: dayCell.today
+            }
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: String(dayCell.modelData.day)
+              color: dayCell.selected ? root.theme.fg : root.theme.readable
+              font.family: root.theme.fontFamily
+              font.pixelSize: root.theme.type.data
+              font.features: root.theme.type.digits
+              font.bold: true
+            }
+          }
+
+          HoverHandler { id: dayHover }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.focusRequested()
+              root.focusStop("day")
+              root.setDay(dayCell.modelData.ms)
+            }
+            onWheel: function (wheel) {
+              root.focusRequested()
+              root.focusStop("day")
+              root.wheelNudge(wheel)
+              wheel.accepted = true
+            }
           }
         }
       }
