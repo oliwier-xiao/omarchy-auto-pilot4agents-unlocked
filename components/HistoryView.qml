@@ -45,12 +45,14 @@ Item {
   // {action, id} of a two-press guard waiting for its second press, or null.
   property var _guard: null
 
-  readonly property double nowMs: root.service ? root.service.nowMs : Date.now()
+  property double _frozenNow: Date.now()
+  readonly property double nowMs: root.active && root.service ? root.service.nowMs : root._frozenNow
   readonly property string dayKey: Model.dayKey(root.nowMs)
   // Day words ("Today") only change at midnight, so the grouping follows this
   // anchor rather than every tick of the clock.
   property double _dayAnchor: Date.now()
   onDayKeyChanged: root._dayAnchor = root.nowMs
+  onServiceChanged: if (root.service) root._frozenNow = root.service.nowMs
   readonly property bool ready: !!root.service && root.service.ready === true
   readonly property var models: root.service && root.service.models ? root.service.models : null
 
@@ -82,7 +84,10 @@ Item {
   }
 
   onDayStartMsChanged: if (root.active) root.loadDay()
-  onActiveChanged: if (root.active) root.loadDay()
+  onActiveChanged: {
+    if (root.active) root.loadDay()
+    else if (root.service) root._frozenNow = root.service.nowMs
+  }
 
   readonly property string hints: {
     if (root._guard && root._guard.action === "run") return "Press Ctrl+Enter again to run now."

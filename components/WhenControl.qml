@@ -97,6 +97,7 @@ Item {
     { stop: "plus120", text: "+2h", minutes: 120 },
     { stop: "plus300", text: "+5h", minutes: 300 }
   ]
+  readonly property var timeChips: root.minusChips.concat(root.plusChips)
   readonly property string cursorStop: root.stops[Math.max(0, Math.min(root.stops.length - 1, root._cursor))]
   readonly property bool typing: root._typed !== ""
 
@@ -129,8 +130,6 @@ Item {
     if (chip && chip.available === true && chip.kind === k && typeof chip.fireAtMs === "number") return chip.fireAtMs
     return NaN
   }
-
-  function resolvedMs() { return root.shownMs }
 
   function reasonText(reason) {
     if (reason === "not_open") return "No limit window is open, so the quota is already fresh."
@@ -720,39 +719,21 @@ Item {
       }
 
       Repeater {
-        model: root.minusChips
+        model: root.timeChips
 
         delegate: Chip {
-          id: minusChip
+          id: timeChip
           required property var modelData
           theme: root.theme
-          text: minusChip.modelData.text
+          text: timeChip.modelData.text
           // Nothing comes before Now.
-          enabled: root.kind !== "now"
-          hasCursor: root.hasCursor && root.cursorStop === minusChip.modelData.stop
-          onHoveredChanged: if (minusChip.hovered && root.hasCursor) root.focusStop(minusChip.modelData.stop)
+          enabled: timeChip.modelData.minutes >= 0 || root.kind !== "now"
+          hasCursor: root.hasCursor && root.cursorStop === timeChip.modelData.stop
+          onHoveredChanged: if (timeChip.hovered && root.hasCursor) root.focusStop(timeChip.modelData.stop)
           onClicked: {
             root.focusRequested()
-            root.focusStop(minusChip.modelData.stop)
-            root.activate(minusChip.modelData.stop)
-          }
-        }
-      }
-
-      Repeater {
-        model: root.plusChips
-
-        delegate: Chip {
-          id: plusChip
-          required property var modelData
-          theme: root.theme
-          text: plusChip.modelData.text
-          hasCursor: root.hasCursor && root.cursorStop === plusChip.modelData.stop
-          onHoveredChanged: if (plusChip.hovered && root.hasCursor) root.focusStop(plusChip.modelData.stop)
-          onClicked: {
-            root.focusRequested()
-            root.focusStop(plusChip.modelData.stop)
-            root.activate(plusChip.modelData.stop)
+            root.focusStop(timeChip.modelData.stop)
+            root.activate(timeChip.modelData.stop)
           }
         }
       }

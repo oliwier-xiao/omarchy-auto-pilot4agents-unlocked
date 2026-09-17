@@ -125,6 +125,18 @@ def repo_files():
             if stat.S_ISREG(st.st_mode) and "__pycache__" not in rel.split(os.sep) and not rel.endswith(".pyc")]
 
 
+def git_ignored(paths):
+    """Subset of relative paths that git would ignore. Empty when git is unavailable."""
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(["git", "-C", ROOT, "check-ignore", "-z", "--stdin"],
+                              input="\0".join(paths) + "\0", capture_output=True, text=True, check=False)
+    except OSError:
+        return set()
+    return {p for p in proc.stdout.split("\0") if p}
+
+
 def read_text(rel):
     """File text, or None for binary content."""
     if os.path.splitext(rel)[1].lower() in BINARY_EXT:
@@ -495,7 +507,11 @@ def check_forbidden_filenames():
 def check_no_agent_files():
     """No agent-control, instruction, handoff or agent-addressed files anywhere in the tree."""
     problems = []
-    for rel, st in repo_entries():
+    entries = list(repo_entries())
+    ignored = git_ignored([rel for rel, _st in entries])
+    for rel, st in entries:
+        if rel in ignored:
+            continue
         name = os.path.basename(rel)
         if stat.S_ISDIR(st.st_mode) and name.lower() in AGENT_DIR_NAMES:
             problems.append("%s/: agent-control folder" % rel)
@@ -504,7 +520,7 @@ def check_no_agent_files():
         elif HANDOFF_NAME.search(name):
             problems.append("%s: handoff or transcript file" % rel)
     for rel in repo_files():
-        if not rel.lower().endswith((".md", ".txt")):
+        if rel in ignored or not rel.lower().endswith((".md", ".txt")):
             continue
         text = read_text(rel) or ""
         for match in AGENT_PROSE.finditer(text):
@@ -563,6 +579,9 @@ def check_process_only_in_bounded_process():
                            ("splitMarker", "does not read raw chunks for its byte cap")):
         if needle not in code:
             problems.append("BoundedProcess.qml: %s" % reason)
+    svc = strip_code(read_text("Service.qml") or "", strings=False)
+    if "Component.onDestruction" not in svc or ".kill()" not in svc:
+        problems.append("Service.qml: has no onDestruction kill of helper processes")
     return problems
 
 

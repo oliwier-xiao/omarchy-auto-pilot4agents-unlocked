@@ -559,18 +559,39 @@ def _current_key(harness_id):
     return {"cliReal": found.get("real"), "cliVersion": version} if version is not None else None
 
 
+# One cmd_list can ask cached() once per OpenCode job. The memo is off unless
+# begin_list_cache() is in force, so unit tests that change the CLI between calls
+# still re-read the files.
+_LIST_CACHE = None
+
+
+def begin_list_cache():
+    global _LIST_CACHE
+    _LIST_CACHE = {}
+
+
+def end_list_cache():
+    global _LIST_CACHE
+    _LIST_CACHE = None
+
+
 def cached(harness_id, now):
     """The cached Models result for harness when younger than 6 h and written for the CLI installed
     now (same real path and version, as detect() checks), else None. Never probes."""
-    if harness_id not in _DETECTORS:
-        return None
-    hit = _load_cache(harness_id)
-    if hit is None or not 0 <= int(now) - hit["result"]["fetchedAt"] <= CACHE_TTL_S:
-        return None
-    key = _current_key(harness_id)
-    if key is None or hit["key"] != key:
-        return None
-    return hit["result"]
+    now = int(now)
+    memo_key = (harness_id, now)
+    if _LIST_CACHE is not None and memo_key in _LIST_CACHE:
+        return _LIST_CACHE[memo_key]
+    result = None
+    if harness_id in _DETECTORS:
+        hit = _load_cache(harness_id)
+        if hit is not None and 0 <= now - hit["result"]["fetchedAt"] <= CACHE_TTL_S:
+            key = _current_key(harness_id)
+            if key is not None and hit["key"] == key:
+                result = hit["result"]
+    if _LIST_CACHE is not None:
+        _LIST_CACHE[memo_key] = result
+    return result
 
 
 def cached_billing(model, now):

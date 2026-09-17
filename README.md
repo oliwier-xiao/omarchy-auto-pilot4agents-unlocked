@@ -2,9 +2,11 @@
 
 Unlocked edition, with Auto and Full access levels. Write a prompt now and send it later to a Claude Code, OpenCode, Codex, Gemini CLI, Cursor Agent or Pi session: in a few minutes, at a clock time, or right after a usage limit resets.
 
-> **This is not the marketplace edition.** It adds two levels that pass each agent's own automatic-approval or permission-bypass flags. **Auto** lets the agent's automatic review approve actions. **Full access** turns permission checks off, so a job can edit files, run any command and reach the network with nobody watching. Arm them only for folders and sessions you would hand to that agent unattended. The marketplace edition, with Plan and Unattended only, is the `main` branch of this repository.
+> **This is not the marketplace edition.** It adds two levels that pass each agent's own automatic-approval or permission-bypass flags. **Auto** lets the agent's automatic review approve actions. **Full access** turns permission checks off, so a job can edit files, run any command and reach the network with nobody watching. Arm them only for folders and sessions you would hand to that agent unattended. The marketplace edition, with Plan and Unattended only, is [Auto Pilot 4 Agents](https://github.com/oliwier-xiao/omarchy-auto-pilot4agents).
 
 Each job runs headless in a transient systemd user timer, so it fires while the screen is locked and while the panel is closed. Auto Pilot shows the exact command before it arms anything, and afterwards it tells you what happened. Cursor Agent runs in Plan or Full access, and Pi in Plan, Auto or Full access (see [Cursor Agent and Pi](#cursor-agent-and-pi)).
+
+![Auto Pilot Unlocked panel on Compose](preview.png)
 
 ## What it does
 
@@ -14,20 +16,21 @@ Each job runs headless in a transient systemd user timer, so it fires while the 
 - **History.** How each run ended (done, failed, limit hit, skipped, missed), with the last lines of output and a ready-to-paste resume command. A day timeline shows that day's runs, resets and armed jobs.
 - **Bar and notifications.** The bar icon says what needs you: a problem, a running job, the countdown to the next job, or what finished. A notification tells you when a job finishes, fails or has to wait.
 
+![Compose](docs/compose.png)
+
+![Queue](docs/queue.png)
+
+![History](docs/history.png)
+
 ## Install
 
-Auto Pilot Unlocked runs as an Omarchy Quattro shell plugin with a background service and a bar widget. No sudo or pkexec is required. It installs beside the marketplace edition: it has its own plugin id, timers, state folder and bar widget.
-
-`omarchy plugin add` installs a repository's default branch, which is the marketplace edition, so install this one from the `unlocked` branch:
+Auto Pilot Unlocked runs as an Omarchy Quattro shell plugin with a background service and a bar widget. No sudo or pkexec is required. It installs beside the marketplace edition: it has its own plugin id, timers, state folder and bar widget. It is not listed on plugins.omarchy.org.
 
 ```
-git clone -b unlocked https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git auto-pilot4agents-unlocked
-cd auto-pilot4agents-unlocked
-./dev-sync.sh
-omarchy plugin enable oliwier.auto-pilot4agents-unlocked
+omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable
 ```
 
-`dev-sync.sh` copies the plugin into `~/.config/omarchy/plugins/oliwier.auto-pilot4agents-unlocked`, validates it and asks the shell to rescan. Run it again after `git pull`. If the bar does not pick it up:
+If the bar does not pick it up:
 
 ```
 omarchy restart shell

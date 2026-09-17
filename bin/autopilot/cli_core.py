@@ -13,8 +13,8 @@ import hashlib
 import os
 import uuid
 
-from . import (agents, bounded, consts, edition, fsio, harness, identity, jobs, reconcile, sessions, settings,
-               systemd, timeutil, trigger, usage)
+from . import (agents, bounded, consts, edition, fsio, harness, identity, jobs, models, reconcile, sessions,
+               settings, systemd, timeutil, trigger, usage)
 from .errors import ApError
 
 _PLACEHOLDER_ID = "0" * 16
@@ -102,7 +102,7 @@ def _fresh_state(gen, last_run, history):
 
 
 def _gate(job, phase, found, now, usage_obj, sd):
-    """paid.check_job for preview or arm. None when the gate module could not be used."""
+    """paid.check_job for preview or arm. Raises internal when the gate could not be used."""
     budget = bounded.remaining_budget()
     deadline = _GATE_DEADLINE_MAX_S if budget is None else max(0.5, min(_GATE_DEADLINE_MAX_S, budget - 2.0))
     try:
@@ -112,8 +112,10 @@ def _gate(job, phase, found, now, usage_obj, sd):
     except ApError:
         raise
     except Exception:
-        return None
-    return gate if isinstance(gate, dict) else None
+        raise ApError("internal")
+    if not isinstance(gate, dict):
+        raise ApError("internal")
+    return gate
 
 
 def _public_gate(gate, job):
@@ -300,7 +302,12 @@ def cmd_list(argv, payload):
     now = timeutil.now()
     ordered = sorted(store["jobs"], key=lambda j: (j["state"]["fireAt"] is None, j["state"]["fireAt"] or 0,
                                                    j["createdAt"]))
-    return {"ok": True, "nowMs": timeutil.now_ms(), "jobs": [jobs.public_job(j, now) for j in ordered],
+    models.begin_list_cache()
+    try:
+        public = [jobs.public_job(j, now) for j in ordered]
+    finally:
+        models.end_list_cache()
+    return {"ok": True, "nowMs": timeutil.now_ms(), "jobs": public,
             "killSwitch": fsio.kill_switch_present(), "enabledInShell": fsio.plugin_enabled_in_shell(),
             "linger": fsio.linger_enabled(), "reconciledAt": store["reconciledAt"]}
 

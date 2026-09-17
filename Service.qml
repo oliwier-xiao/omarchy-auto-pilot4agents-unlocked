@@ -278,6 +278,9 @@ Item {
   })
 
   readonly property int _writeQueueMax: 16
+  readonly property int _readInflightMax: 16
+  readonly property int _readWaitMax: 16
+  property var _readWait: []
 
   // ---------------------------------------------------------------- public functions
 
@@ -765,21 +768,55 @@ Item {
   // Reads: one process per key. A read asked for while the same one runs waits for
   // it and then runs once more (the store may have changed meanwhile), with every
   // waiting callback merged. Previews are different: only the newest one matters.
-  function _requestRead(req) {
-    if (!root._readInflight.hasOwnProperty(req.key)) {
-      root._startRead(req)
-      return
-    }
-    var pending = root._readPending.hasOwnProperty(req.key) ? root._readPending[req.key] : null
+  // At most sixteen distinct reads run at once (the same bound as the write queue);
+  // anything else waits, so a History walk or a Compose that asks for models, sessions
+  // and a preview cannot start a helper per request without limit.
+  function _readInflightCount() {
+    return Object.keys(root._readInflight).length
+  }
+
+  function _mergeRead(existing, req) {
     if (req.verb === "preview") {
-      if (pending) Qt.callLater(function () { root._deliver(pending, root._qmlError("superseded")) })
-      root._readPending = root._with(root._readPending, req.key, req)
+      if (existing) Qt.callLater(function () { root._deliver(existing, root._qmlError("superseded")) })
+      return req
+    }
+    return existing
+      ? { verb: existing.verb, args: existing.args, payload: existing.payload, cbs: existing.cbs.concat(req.cbs), key: existing.key }
+      : req
+  }
+
+  function _requestRead(req) {
+    if (root._readInflight.hasOwnProperty(req.key)) {
+      var pending = root._readPending.hasOwnProperty(req.key) ? root._readPending[req.key] : null
+      root._readPending = root._with(root._readPending, req.key, root._mergeRead(pending, req))
       return
     }
-    var merged = pending
-      ? { verb: pending.verb, args: pending.args, payload: pending.payload, cbs: pending.cbs.concat(req.cbs), key: pending.key }
-      : req
-    root._readPending = root._with(root._readPending, req.key, merged)
+    for (var i = 0; i < root._readWait.length; i++) {
+      if (root._readWait[i].key === req.key) {
+        var copy = root._readWait.slice()
+        copy[i] = root._mergeRead(copy[i], req)
+        root._readWait = copy
+        return
+      }
+    }
+    if (root._readInflightCount() >= root._readInflightMax) {
+      if (root._readWait.length >= root._readWaitMax) {
+        Qt.callLater(function () { root._deliver(req, root._qmlError("busy_queue")) })
+        return
+      }
+      root._readWait = root._readWait.concat([req])
+      return
+    }
+    root._startRead(req)
+  }
+
+  function _drainReadWait() {
+    while (root._readWait.length > 0 && root._readInflightCount() < root._readInflightMax) {
+      var next = root._readWait[0]
+      root._readWait = root._readWait.slice(1)
+      if (root._readInflight.hasOwnProperty(next.key)) root._requestRead(next)
+      else root._startRead(next)
+    }
   }
 
   function _startRead(req) {
@@ -792,6 +829,7 @@ Item {
       if (next) root._readPending = root._without(root._readPending, req.key)
       root._deliver(req, next && req.verb === "preview" ? root._qmlError("superseded") : res)
       if (next) root._startRead(next)
+      else root._drainReadWait()
     })
   }
 
@@ -971,6 +1009,13 @@ Item {
   Component.onCompleted: {
     startTimer.restart()
     root._armClock()
+  }
+
+  Component.onDestruction: {
+    var kids = root.children
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i] && typeof kids[i].kill === "function") kids[i].kill()
+    }
   }
 
   // Callable by anything running as this user, so nothing here takes text and

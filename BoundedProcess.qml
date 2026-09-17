@@ -45,8 +45,8 @@ Item {
   property int _exitCode: -1
   property int _outCount: 0
   property int _errCount: 0
-  property string _outText: ""
-  property string _errText: ""
+  property var _outChunks: []
+  property var _errChunks: []
 
   function start() {
     if (root._running || !root._settled || proc.running) return false
@@ -70,8 +70,8 @@ Item {
     root._exitCode = -1
     root._outCount = 0
     root._errCount = 0
-    root._outText = ""
-    root._errText = ""
+    root._outChunks = []
+    root._errChunks = []
 
     proc.clearEnvironment = true
     proc.environment = env
@@ -111,12 +111,12 @@ Item {
     var s = String(chunk)
     if (root._outCount + s.length > root.maxStdoutBytes) {
       root._overflowed = true
-      root._outText = ""
+      root._outChunks = []
       root._hardKill()
       return
     }
     root._outCount += s.length
-    root._outText += s
+    root._outChunks.push(s)
   }
 
   function _takeErr(chunk) {
@@ -124,12 +124,12 @@ Item {
     var s = String(chunk)
     if (root._errCount + s.length > root.maxStderrBytes) {
       root._overflowed = true
-      root._errText = ""
+      root._errChunks = []
       root._hardKill()
       return
     }
     root._errCount += s.length
-    root._errText += s
+    root._errChunks.push(s)
   }
 
   function _settle() {
@@ -140,10 +140,10 @@ Item {
     killTimer.stop()
     abandonTimer.stop()
     var code = (root._signalled || !root._exitSeen || root._crashed) ? -1 : root._exitCode
-    var out = root._outText
-    var err = root._errText
-    root._outText = ""
-    root._errText = ""
+    var out = root._outChunks.join("")
+    var err = root._errChunks.join("")
+    root._outChunks = []
+    root._errChunks = []
     root.finished(code, root._overflowed, root._timedOut, out, err)
   }
 

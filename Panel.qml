@@ -283,10 +283,14 @@ Panel {
   // ---------------------------------------------------------------- default view (R6 2.2)
 
   function eventAt(job) {
-    var st = job.state
-    if (st.lastEvent && typeof st.lastEvent.at === "number") return st.lastEvent.at
-    if (st.lastRun && typeof st.lastRun.endedAt === "number") return st.lastRun.endedAt
-    return typeof job.updatedAt === "number" ? job.updatedAt : 0
+    var st = job.state || {}
+    var ended = st.lastRun && typeof st.lastRun.endedAt === "number" ? st.lastRun.endedAt : 0
+    if (typeof st.statusAt === "number" && isFinite(st.statusAt)) return Math.max(st.statusAt, ended)
+    var at = Math.max(typeof job.updatedAt === "number" ? job.updatedAt : 0, ended)
+    var house = ["prompt_deleted", "cli_changed", "late_result"]
+    if (st.lastEvent && typeof st.lastEvent.at === "number"
+        && house.indexOf(String(st.lastEvent.event)) < 0) at = Math.max(at, st.lastEvent.at)
+    return at
   }
 
   // A running job, or something that went wrong since the panel was last closed,

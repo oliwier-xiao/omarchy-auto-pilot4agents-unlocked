@@ -60,6 +60,14 @@ Item {
   width: contentWidth
   height: contentHeight
 
+  Rectangle {
+    anchors.fill: parent
+    z: -1
+    color: Color.popups.background
+    border.color: Border.color(root.borderSpec)
+    border.width: Border.uniformWidth(root.borderSpec)
+  }
+
   onOpenChanged: {
     if (open && focusTarget) Qt.callLater(function () { if (root.focusTarget) root.focusTarget.forceActiveFocus() })
   }

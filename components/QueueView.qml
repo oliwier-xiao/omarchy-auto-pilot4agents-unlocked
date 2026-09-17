@@ -57,11 +57,13 @@ Item {
   property real _ghostY: 0
   property int _autoScroll: 0
 
-  readonly property double nowMs: root.service ? root.service.nowMs : Date.now()
+  property double _frozenNow: Date.now()
+  readonly property double nowMs: root.active && root.service ? root.service.nowMs : root._frozenNow
   readonly property bool ready: !!root.service && root.service.ready === true
   readonly property string dayKey: Model.dayKey(root.nowMs)
   property double _dayAnchor: Date.now()
   onDayKeyChanged: root._dayAnchor = root.nowMs
+  onServiceChanged: if (root.service) root._frozenNow = root.service.nowMs
 
   readonly property var jobsList: root.service && Array.isArray(root.service.jobs) ? root.service.jobs : []
   readonly property var providers: root.service && Array.isArray(root.service.providers) ? root.service.providers : []
@@ -802,7 +804,10 @@ Item {
     }
   }
 
-  onActiveChanged: if (!root.active) { root.cancelDrag(); root.clearGuard(); root.flushNudge() }
+  onActiveChanged: if (!root.active) {
+    if (root.service) root._frozenNow = root.service.nowMs
+    root.cancelDrag(); root.clearGuard(); root.flushNudge()
+  }
 
   ListModel { id: rowModel }
 

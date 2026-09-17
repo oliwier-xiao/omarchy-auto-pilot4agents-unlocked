@@ -2159,9 +2159,7 @@ class V2CoreTests(Sandbox):
         self.assertEqual((rc, obj["preview"]["fireAtError"]), (0, "no_reset_data"))
         self.gate_over = RuntimeError("probe bug")
         rc, obj, _err = self.verb("preview", stdin=json.dumps(self.draft()))
-        self.assertEqual((rc, obj["preview"]["gate"]), (0, {"ok": False, "code": None, "detail": None, "notes": [],
-                                                            "billing": None, "provider": None, "resetAtMs": None,
-                                                            "pending": True}))
+        self.assertEqual((rc, obj.get("code")), (1, "internal"))
 
     def test_preview_no_budget_flag_when_off(self):
         off = self.verb("preview", stdin=json.dumps(self.draft(limits={"budgetUsd": 7.5})))[1]["preview"]

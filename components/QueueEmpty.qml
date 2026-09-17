@@ -3,6 +3,7 @@ import QtQuick
 import qs.Commons
 import "../lib/Edition.js" as Edition
 import "../lib/Model.js" as Model
+import "../lib/Compose.js" as Compose
 
 // The queue on first use (R6 8.5): left aligned, it teaches with the real vocabulary
 // instead of numbered steps. The time chips and agent pills describe what Compose
@@ -22,17 +23,18 @@ Item {
   readonly property var settings: root.service && root.service.settings ? root.service.settings : ({})
   readonly property var agents: root.service && root.service.agents ? root.service.agents : ({})
 
-  readonly property var resetChip: Model.resetChip(root.service ? root.service.usage : null, "claude",
-    root.nowMs, typeof root.settings.resetMarginSec === "number" ? root.settings.resetMarginSec : 120)
+  readonly property var resetChip: Compose.resetChipFor(root.service ? root.service.providers : [], "claude",
+    "", "", "", root.nowMs, typeof root.settings.resetMarginSec === "number" ? root.settings.resetMarginSec : 120)
 
   readonly property var morning: Model.morningPreset(String(root.settings.morningTime || "07:00"), root.nowMs)
   readonly property int marginSec: typeof root.settings.resetMarginSec === "number" ? root.settings.resetMarginSec : 120
 
   function agentNote(h) {
-    var a = root.agents[h]
-    if (!a) return ""
-    if (a.available !== true) return "not found"
-    if (h === "codex" && a.enabled === false) return "not signed in"
+    var s = Model.signInState(root.agents[h], h, false)
+    if (s.reasonKey === "not_found") return "not found"
+    if (s.reasonKey === "not_signed_in") return "not signed in"
+    if (s.reasonKey === "untrusted") return "untrusted"
+    if (s.reasonKey === "shim") return "shim"
     return ""
   }
 
@@ -145,13 +147,14 @@ Item {
         Chip {
           id: agentChip
           required property var modelData
+          readonly property string noteText: root.agentNote(String(modelData))
           theme: root.theme
           pill: true
           harness: String(modelData)
           text: Model.harnessName(modelData)
-          note: root.agentNote(String(modelData))
-          noteColor: root.agentNote(String(modelData)) === "" ? root.theme.soft : root.theme.warnInk
-          tint: root.agentNote(String(modelData)) === "" ? root.theme.harnessInk(String(modelData)) : root.theme.soft
+          note: agentChip.noteText
+          noteColor: agentChip.noteText === "" ? root.theme.soft : root.theme.warnInk
+          tint: agentChip.noteText === "" ? root.theme.harnessInk(String(modelData)) : root.theme.soft
           hasCursor: agentChip.hovered
           onClicked: root.composeRequested(null)
         }

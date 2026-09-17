@@ -5,3 +5,8 @@ __pycache__/
 *.swp
 *~
 .DS_Store
+.claude/
+.cursor/
+.codex/
+.gemini/
+.opencode/
