@@ -6,6 +6,10 @@ Unlocked edition, with Auto and Full access levels. Write a prompt now and send 
 
 Each job runs headless in a transient systemd user timer, so it fires while the screen is locked and while the panel is closed. Auto Pilot shows the exact command before it arms anything, and afterwards it tells you what happened. Cursor Agent runs in Plan or Full access, and Pi in Plan, Auto or Full access (see [Cursor Agent and Pi](#cursor-agent-and-pi)).
 
+| Install | Update | Remove |
+|---|---|---|
+| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked` — after [cancelling jobs](#removal) |
+
 ![Auto Pilot Unlocked panel on Compose](preview.png)
 
 ## What it does
@@ -37,6 +41,9 @@ omarchy restart shell
 ```
 
 The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
+
+Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps,
+jobs first — see [Removal](#removal).
 
 ## Dependencies
 
@@ -155,7 +162,7 @@ The model row in Compose opens the model picker. It lists the models each agent 
 - Claude Code: `fable`, `opus`, `sonnet` and `haiku`, each with the newest version it names, then pinned versions such as Claude Opus 5, named from the models.dev copy that OpenCode keeps. Without OpenCode, only the four names are listed. The model in your Claude settings is marked default.
 - Gemini CLI from its installed package
 
-The list is kept for 6 hours and `Ctrl+R` reads it again. **Agent default** leaves the choice to the agent. Pi has no Agent default, because Pi's own fallback would try Claude first, so a Pi job always names a provider and a model.
+The list is kept for 6 hours and `Ctrl+R` reads it again. **Agent default** leaves the choice to the agent. Pi has no Agent default, because Pi's own fallback would try Claude first.
 
 ## Permission levels
 
