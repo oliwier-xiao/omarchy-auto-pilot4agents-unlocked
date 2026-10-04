@@ -127,7 +127,7 @@ def check_argv(verb, argv):
     elif verb == "sessions":
         _check_sessions(argv)
     elif verb == "dirs":
-        _need(count == 2 and argv[0] == "--path" and _cwd_ok(argv[1]))
+        _need(count in (2, 3) and argv[0] == "--path" and _cwd_ok(argv[1]) and argv[2:] in ([], ["--hidden"]))
     elif verb == "workspace":
         _need(count == 0 or argv == ["--create"])
     elif verb == "models":

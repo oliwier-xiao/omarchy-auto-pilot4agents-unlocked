@@ -382,15 +382,25 @@ def _claude_meta(records):
     return cwd, _title((custom, ai_title, user_text), cwd)
 
 
+_CLAUDE_NAME_MAX = 200
+
+
 def _claude_dir_name(cwd):
     """The project folder name Claude Code keeps a working folder's transcripts under."""
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
-def _claude_named_dirs(only):
-    """The real project folders named after the folders in only (a link is never one)."""
+def _claude_named_dirs(only, budget, counter):
+    """The real project folders named after the folders in only (a link is never one).
+
+    Claude names a project folder after its working folder; a name longer than
+    _CLAUDE_NAME_MAX is cut there and given a hash, so such a folder also matches the project
+    folders that start with its first _CLAUDE_NAME_MAX characters. No transcript of any other
+    project is read: the rows are matched on their recorded folder afterwards anyway.
+    """
+    names = {_claude_dir_name(path) for path in only}
     found = []
-    for name in sorted({_claude_dir_name(path) for path in only}):
+    for name in sorted(names):
         path = _home_path(".claude", "projects", name)
         try:
             info = os.lstat(path)
@@ -398,14 +408,18 @@ def _claude_named_dirs(only):
             continue
         if stat.S_ISDIR(info.st_mode):
             found.append(path)
+    prefixes = tuple(name[:_CLAUDE_NAME_MAX] for name in names if len(name) > _CLAUDE_NAME_MAX)
+    if prefixes:
+        for path in _claude_project_dirs(budget, counter)[0]:
+            if os.path.basename(path).startswith(prefixes) and path not in found:
+                found.append(path)
     return found
 
 
 def _claude_list(budget, cap, cutoff_s, only=None):
     counter = [0]
-    named = _claude_named_dirs(only) if only is not None else []
-    if named:
-        project_dirs, truncated = named, False
+    if only is not None:
+        project_dirs, truncated = _claude_named_dirs(only, budget, counter), False
     else:
         project_dirs, truncated = _claude_project_dirs(budget, counter)
     candidates = []
@@ -808,14 +822,19 @@ def _codex_list(budget, cap, cutoff_ms, only=None):
         folder, params = _in_clause("cwd", only)
         sql = (select + "WHERE " + " AND ".join(where + ["%s >= ?" % updated]) + folder
                + " ORDER BY %s DESC LIMIT ?" % updated)
+        indexed = False
         try:
             fetched = connection.execute(sql, (cutoff_ms,) + params + (cap + 1,)).fetchmany(cap + 1)
+            # A folder with no thread in an index that holds threads has none: the rollout files
+            # are read only when the index itself is empty.
+            if not fetched and only is not None:
+                indexed = bool(connection.execute("SELECT 1 FROM threads LIMIT 1").fetchmany(1))
         except sqlite3.Error as err:
             fetched, error = [], _sql_error(err)
         finally:
             connection.close()
         rows = _codex_rows(fetched, cutoff_ms)
-        if rows:
+        if rows or indexed:
             return rows[:cap], len(fetched) > cap, None
     if error == ERROR_TIMEOUT:
         return [], True, error
@@ -1304,7 +1323,8 @@ def list_sessions(harness, now, *, cwd=None, only=None):
     folder = None
     if only is not None:
         cwd = only.rstrip("/") or "/"
-        folder = frozenset((cwd, os.path.realpath(cwd)))
+        real = _valid_cwd(os.path.realpath(cwd))
+        folder = frozenset((cwd, real) if real is not None else (cwd,))
     fsio.home()
     now = int(now)
     cap = consts.SESSIONS_PER_HARNESS
@@ -1315,6 +1335,9 @@ def list_sessions(harness, now, *, cwd=None, only=None):
     sessions, counts, truncated, errors = [], {}, {}, {}
     for name in scope:
         rows, cut, error = [], False, None
+        if folder is not None:
+            # One folder: every agent gets its own share, so a slow store never empties the others.
+            budget = _Budget(consts.SESSIONS_DEADLINE_S / len(scope), _SCAN_BYTES_MAX // len(scope))
         if budget.expired():
             cut, error = True, ERROR_TIMEOUT
         else:

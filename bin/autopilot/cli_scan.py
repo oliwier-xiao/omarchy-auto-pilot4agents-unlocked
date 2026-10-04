@@ -68,11 +68,11 @@ def cmd_sessions(argv, payload):
 
 
 def cmd_dirs(argv, payload):
-    """dirs --path <abs> -> the subfolders of one folder inside the home folder."""
+    """dirs --path <abs> [--hidden] -> the subfolders of one folder inside the home folder."""
     args = list(argv or [])
-    if len(args) != 2 or args[0] != "--path" or not _cwd_ok(args[1]):
+    if len(args) not in (2, 3) or args[0] != "--path" or not _cwd_ok(args[1]) or args[2:] not in ([], ["--hidden"]):
         raise ApError("bad_args")
-    return dict({"ok": True}, **folders.list_dirs(args[1]))
+    return dict({"ok": True}, **folders.list_dirs(args[1], hidden=len(args) == 3))
 
 
 def cmd_workspace(argv, payload):

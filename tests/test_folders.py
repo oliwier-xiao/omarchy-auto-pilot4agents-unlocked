@@ -31,7 +31,11 @@ class DirsTests(ScanCase):
         self.write("worktree/.git", "gitdir: /elsewhere\n")
         self.write("notes.txt", "x")
         answer = folders.list_dirs(self.home)
+        self.assertEqual(names(answer), ["alpha", "code", "worktree", "Zeta"])
+        self.assertEqual((answer["hidden"], answer["hiddenCount"]), (False, 1))
+        answer = folders.list_dirs(self.home, hidden=True)
         self.assertEqual(names(answer), ["alpha", "code", "worktree", "Zeta", ".config"])
+        self.assertEqual((answer["hidden"], answer["hiddenCount"]), (True, 1))
         self.assertEqual((answer["path"], answer["home"], answer["parent"], answer["state"]),
                          (os.path.realpath(self.home), os.path.realpath(self.home), None, "ok"))
         by = {entry["name"]: entry for entry in answer["entries"]}
@@ -61,8 +65,37 @@ class DirsTests(ScanCase):
         answer = folders.list_dirs(os.path.join(self.home, "links"))
         by = {entry["name"]: entry for entry in answer["entries"]}
         self.assertEqual(sorted(by), ["api", "out"])
-        self.assertEqual((by["api"]["link"], by["api"]["target"]), (True, os.path.realpath(target)))
-        self.assertEqual((by["out"]["link"], by["out"]["target"]), (True, None))
+        self.assertEqual((by["api"]["link"], by["api"]["target"], by["api"]["outside"]), (True, os.path.realpath(target), False))
+        self.assertEqual((by["out"]["link"], by["out"]["target"], by["out"]["outside"]), (True, None, True))
+
+    def test_a_link_to_an_unclean_name_is_answered_without_its_target(self):
+        os.mkdir(os.fsencode(self.home) + b"/bad\xff")
+        os.mkdir(os.path.join(self.home, "rlo\u202egpj"))
+        self.mkdir("links")
+        os.symlink(os.fsencode(self.home) + b"/bad\xff",
+                   os.path.join(self.home, "links", "to-bad").encode())
+        os.symlink(os.path.join(self.home, "rlo\u202egpj"), os.path.join(self.home, "links", "to-rlo"))
+        answer = cli_scan.cmd_dirs(["--path", os.path.join(self.home, "links")], None)
+        by = {entry["name"]: entry for entry in answer["entries"]}
+        self.assertEqual(sorted(by), ["to-bad", "to-rlo"])
+        self.assertTrue(all(row["target"] is None and row["outside"] is False for row in by.values()))
+        self.assertEqual(answer["skipped"], 2)
+        # The answer stays one JSON line the helper can write.
+        self.assertTrue(json.dumps(answer, ensure_ascii=False).encode("utf-8"))
+        with self.assertRaises(ApError):
+            folders.list_dirs(os.path.join(self.home, "links", "to-rlo"))
+
+    def test_the_answer_is_cut_to_its_output_cap_not_dropped(self):
+        long_target = self.mkdir("t/" + "x" * 200 + "/" + "y" * 200)
+        self.mkdir("many")
+        for n in range(40):
+            os.symlink(long_target, os.path.join(self.home, "many", "l%02d" % n + "z" * 200))
+        self.patch(consts, "OUTPUT_CAP", dict(consts.OUTPUT_CAP, dirs=16384))
+        answer = folders.list_dirs(os.path.join(self.home, "many"))
+        self.assertTrue(answer["truncated"])
+        self.assertLess(0, len(answer["entries"]))
+        self.assertLess(len(answer["entries"]), 40)
+        self.assertLess(len(json.dumps(dict({"ok": True}, **answer), ensure_ascii=False).encode()), 16384)
 
     def test_outside_home_missing_and_unprintable(self):
         for path in ("/", self.tmp, os.path.join(self.tmp, "elsewhere")):
@@ -105,8 +138,11 @@ class DirsTests(ScanCase):
         self.mkdir("code")
         result = cli_scan.cmd_dirs(["--path", self.home], None)
         self.assertEqual((list(result)[0], names(result)), ("ok", ["code"]))
+        self.assertEqual(cli_scan.cmd_dirs(["--path", self.home, "--hidden"], None)["hidden"], True)
+        main.check_argv("dirs", ["--path", self.home, "--hidden"])
         for argv in ([], ["--path"], ["--path", "relative"], ["--path", self.home, "x"], ["--dir", self.home],
-                     ["--path", self.home + "/\n"]):
+                     ["--path", self.home + "/\n"], ["--hidden", "--path", self.home],
+                     ["--path", self.home, "--hidden", "--hidden"]):
             with self.assertRaises(ApError) as caught:
                 cli_scan.cmd_dirs(argv, None)
             self.assertEqual(caught.exception.code, "bad_args")
@@ -151,23 +187,39 @@ class WorkspaceTests(ScanCase):
         with self.assertRaises(ApError) as caught:
             folders.workspace(True)
         self.assertEqual(caught.exception.code, "invalid_cwd")
-        self.assertEqual(folders.workspace(False)["exists"], False)
+        self.assertEqual((folders.workspace(False)["exists"], folders.workspace(False)["refused"]), (False, True))
         with open(self.path()) as handle:
             self.assertEqual(handle.read(), "not a folder")
 
+        # A link is refused wherever it leads: outside the home folder, or to a folder inside it.
         os.unlink(self.path())
-        outside = os.path.join(self.tmp, "outside")
-        os.makedirs(outside)
-        os.symlink(outside, self.path())
+        for target in (os.path.join(os.path.dirname(self.tmp), "ap4a-outside-%d" % os.getpid()),
+                       self.mkdir("Projects/scratch"), self.mkdir(".ssh")):
+            os.makedirs(target, exist_ok=True)
+            os.symlink(target, self.path())
+            try:
+                with self.assertRaises(ApError):
+                    folders.workspace(True)
+                self.assertEqual(folders.workspace(False)["refused"], True)
+                self.assertTrue(os.path.islink(self.path()))
+            finally:
+                os.unlink(self.path())
+                if not target.startswith(self.home):
+                    os.rmdir(target)
+        os.symlink(os.path.join(self.home, "missing"), self.path())
         with self.assertRaises(ApError):
             folders.workspace(True)
-        self.assertTrue(os.path.islink(self.path()))
-
         os.unlink(self.path())
-        inside = self.mkdir("Projects/scratch")
-        os.symlink(inside, self.path())
+
+    def test_a_folder_others_can_write_is_refused_and_a_private_one_used(self):
+        os.mkdir(self.path(), 0o700)
+        os.chmod(self.path(), 0o777)
+        with self.assertRaises(ApError):
+            folders.workspace(True)
+        self.assertEqual(stat.S_IMODE(os.lstat(self.path()).st_mode), 0o777)
+        os.chmod(self.path(), 0o755)
         answer = folders.workspace(True)
-        self.assertEqual((answer["exists"], answer["created"], answer["path"]), (True, False, os.path.realpath(inside)))
+        self.assertEqual((answer["exists"], answer["created"], answer["refused"]), (True, False, False))
 
 
 class SessionsInTests(ScanCase):
@@ -185,11 +237,23 @@ class SessionsInTests(ScanCase):
         self.assertEqual([row["id"] for row in result["sessions"]], [uid(1), uid(2)])
         self.assertEqual((result["in"], result["cwd"]), (api, api))
 
-        # A transcript Claude kept elsewhere is still found, by its recorded folder.
+        # Other projects are never read for one folder, even when no project folder is named after it.
         os.rename(os.path.join(self.home, ".claude", "projects", named),
                   os.path.join(self.home, ".claude", "projects", "renamed"))
+        reads = []
+        real_head = sessions._head_records
+        self.patch(sessions, "_head_records", lambda path, *a: reads.append(path) or real_head(path, *a))
         result = sessions.list_sessions("claude", self.now, only=api)
-        self.assertEqual(sorted(row["id"] for row in result["sessions"]), [uid(1), uid(2)])
+        self.assertEqual((result["sessions"], reads), ([], []))
+
+    def test_claude_long_folder_names_match_their_cut_project_folder(self):
+        deep = self.mkdir("/".join(["segment%02d" % n for n in range(25)]))
+        named = sessions._claude_dir_name(deep)
+        self.assertGreater(len(named), 200)
+        self.transcript(named[:200] + "-1a2b3c", uid(1), self.claude_head(deep, "Deep folder"), age_s=60)
+        self.transcript(named[:150] + "-other", uid(2), self.claude_head("/w/x", "Elsewhere"), age_s=30)
+        rows = sessions.list_sessions("claude", self.now, only=deep)["sessions"]
+        self.assertEqual([row["id"] for row in rows], [uid(1)])
 
     def test_sqlite_agents_filter_in_the_query(self):
         base = self.now * 1000
@@ -203,9 +267,16 @@ class SessionsInTests(ScanCase):
                          [("codex", uid(1)), ("opencode", "ses_here000001")])
         self.assertEqual(result["needsCwd"], [])
 
-        os.unlink(os.path.join(self.home, ".codex", "state_5.sqlite"))
+        # A healthy index with no thread for the folder is the answer; rollouts are not read.
         self.rollout(uid(10), "/w/here", "Rollout here", age_s=100)
         self.rollout(uid(11), "/w/there", "Rollout there", age_s=50)
+        self.assertEqual(sessions.list_sessions("codex", self.now, only="/w/elsewhere")["sessions"], [])
+        # Only an empty or absent index falls back to the rollout files.
+        os.unlink(os.path.join(self.home, ".codex", "state_5.sqlite"))
+        self.codex_db([])
+        rows = sessions.list_sessions("codex", self.now, only="/w/here")["sessions"]
+        self.assertEqual([row["id"] for row in rows], [uid(10)])
+        os.unlink(os.path.join(self.home, ".codex", "state_5.sqlite"))
         rows = sessions.list_sessions("codex", self.now, only="/w/here")["sessions"]
         self.assertEqual([row["id"] for row in rows], [uid(10)])
 
@@ -244,6 +315,26 @@ class SessionsInTests(ScanCase):
         self.transcript(sessions._claude_dir_name(real), uid(1), self.claude_head(real), age_s=60)
         rows = sessions.list_sessions("claude", self.now, only=link)["sessions"]
         self.assertEqual([row["id"] for row in rows], [uid(1)])
+
+    def test_a_link_to_an_unclean_folder_lists_by_the_given_path_only(self):
+        os.mkdir(os.fsencode(self.home) + b"/bad\xff")
+        link = os.path.join(self.home, "bad-link")
+        os.symlink(os.fsencode(self.home) + b"/bad\xff", link.encode())
+        self.codex_db([(uid(1), link, "", 0, "By the link", self.now * 1000, "", self.now)])
+        result = cli_scan.cmd_sessions(["--in", link], None)
+        self.assertEqual([row["id"] for row in result["sessions"]], [uid(1)])
+
+    def test_each_agent_gets_its_own_share_of_the_time(self):
+        calls = []
+        real_budget = sessions._Budget
+
+        def budget(seconds, *rest):
+            calls.append(seconds)
+            return real_budget(seconds, *rest)
+        self.patch(sessions, "_Budget", budget)
+        sessions.list_sessions(None, self.now, only="/w/x")
+        share = consts.SESSIONS_DEADLINE_S / len(consts.HARNESSES)
+        self.assertEqual(calls[1:], [share] * len(consts.HARNESSES))
 
     def test_in_argv_and_refusals(self):
         result = cli_scan.cmd_sessions(["--harness", "gemini", "--in", "/w/x"], None)
