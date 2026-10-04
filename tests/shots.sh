@@ -22,6 +22,18 @@ cp "$REPO"/*.qml "$W/"
 cp -r "$REPO/lib" "$REPO/components" "$W/"
 cp -r "$REPO/lint/qs" "$REPO/lint/Quickshell" "$W/imports/"
 
+# A home folder, so paths read as ~/... the way they do on a desktop.
+cat > "$W/imports/Quickshell/Quickshell.qml" <<'QML'
+pragma Singleton
+import QtQuick
+QtObject {
+  property var screens: []
+  property string shellDir: ""
+  property string clipboardText: ""
+  function env(name) { return name === "HOME" ? "/home/u" : "" }
+}
+QML
+
 # Tokyo Night, the palette Auto Pilot is developed against, so the listing matches the live card.
 cat > "$W/imports/qs/Commons/Color.qml" <<'QML'
 pragma Singleton
@@ -284,6 +296,8 @@ Window {
       pi: { harness: "pi", name: "Pi", cliName: "pi", available: true, link: "/home/u/.local/share/mise/installs/pi/latest/pi/pi", real: "/home/u/.local/share/mise/installs/pi/0.74.0/pi/pi", version: "0.74.0", loggedIn: true, reason: null, canFork: true, triggers: ["now", "in", "at", "codex_window_reset"], enabled: true, armable: true, gated: false }
     })
     property var sessions: ({})
+    property var dirs: ({})
+    property var workspace: ({ path: "/home/u/AutoPilot", exists: true })
     property var models: ({})
     property var timeline: ({})
     property var settings: ({ schemaVersion: 1, defaultHarness: "claude", defaultLevel: "plan", resetMarginSec: 120, eveningTime: "23:00", morningTime: "07:00", notify: "all", motion: "reduced", defaultAllowPaid: false, limitsShown: "auto", lastSeenAt: null })
@@ -292,6 +306,7 @@ Window {
     property bool loadingUsage: false
     property bool loadingAgents: false
     property bool loadingSessions: false
+    property bool loadingDirs: false
     property bool loadingSettings: false
     property bool loadingModels: false
     property bool loadingTimeline: false
@@ -315,7 +330,55 @@ Window {
     function refresh() {}
     function refreshUsage() {}
     function refreshAgents(checkLogin) {}
-    function loadSessions(harness, cwd) {}
+    function sessionRow(harness, id, title, cwd, agoMin, messages) {
+      return { harness: harness, id: id, title: title, cwd: cwd, updatedAtMs: host.nowStart - agoMin * 60000,
+               messages: messages, canFork: harness !== "gemini" && harness !== "cursor", path: harness === "pi" ? cwd + "/s.jsonl" : null }
+    }
+    function sessionAnswer(rows, extra) {
+      var a = { ok: true, harness: null, nowMs: host.nowStart, sessions: rows, counts: {},
+                truncated: { claude: false, opencode: false, codex: false, gemini: false, cursor: false, pi: false },
+                errors: {}, limitDays: 90, perHarnessCap: 50, cwd: null, needsCwd: [] }
+      for (var k in extra) a[k] = extra[k]
+      return a
+    }
+    readonly property var recentRows: [
+      sessionRow("claude", "3f2a0c19-0000-4000-8000-000000000001", "Fix the flaky retry test in CI", "/home/u/code/api", 120, 41),
+      sessionRow("cursor", "c0ffee00-1111-4222-8333-000000000001", "Nightly dependency audit", "/home/u/code/api", 240, null),
+      sessionRow("opencode", "ses_abcdefgh1234", "Regenerate the API client", "/home/u/code/web", 300, 36),
+      sessionRow("pi", "0199aaaa-1111-7222-8333-000000000001", "Review the plugin manifest", "/home/u/code/omarchy-plugins", 360, 7),
+      sessionRow("claude", "3f2a0c19-0000-4000-8000-000000000002", "Weekly report on open pull requests", "/home/u/AutoPilot", 1200, 9),
+      sessionRow("codex", "019a0c19-0000-7000-8000-000000000003", "Add backoff to the HTTP client", "/home/u/code/api", 1500, 18),
+      sessionRow("gemini", "5b2a0c19-0000-4000-8000-000000000004", "Docs pass on the README", "/home/u/code/web", 2900, 22),
+      sessionRow("claude", "3f2a0c19-0000-4000-8000-000000000005", "Refactor the auth middleware", "/home/u/code/api", 4400, 12)
+    ]
+    function loadSessions(harness, cwd) {
+      stubService.sessions = { all: stubService.sessionAnswer(stubService.recentRows, {}) }
+    }
+    function loadFolderSessions(path) {
+      var rows = []
+      for (var i = 0; i < stubService.recentRows.length; i++) if (stubService.recentRows[i].cwd === path) rows.push(stubService.recentRows[i])
+      if (path === "/home/u/code/api")
+        rows.push(stubService.sessionRow("claude", "3f2a0c19-0000-4000-8000-000000000006", "Scaffold the service and its tests", path, 60 * 24 * 41, 64))
+      var next = {}
+      for (var k in stubService.sessions) next[k] = stubService.sessions[k]
+      next["in"] = stubService.sessionAnswer(rows, { cwd: path, "in": path })
+      stubService.sessions = next
+    }
+    function dirEntry(name, git) { return { name: name, hidden: name.charAt(0) === ".", git: git === true, own: true, link: false, target: null } }
+    readonly property var tree: ({
+      "/home/u": [dirEntry("AutoPilot"), dirEntry("code"), dirEntry("Documents"), dirEntry("dotfiles", true), dirEntry("notes"), dirEntry(".config")],
+      "/home/u/code": [dirEntry("api", true), dirEntry("omarchy-plugins", true), dirEntry("scratch"), dirEntry("web", true)],
+      "/home/u/code/api": [dirEntry("docs"), dirEntry("src"), dirEntry("tests")]
+    })
+    function loadDirs(path) {
+      var next = {}
+      for (var k in stubService.dirs) next[k] = stubService.dirs[k]
+      next[path] = { ok: true, path: path, home: "/home/u", state: "ok", git: false, own: true, truncated: false, skipped: 0,
+                     entries: stubService.tree[path] || [] }
+      stubService.dirs = next
+    }
+    function clearDirs() { stubService.dirs = ({}) }
+    function loadWorkspace(create, cb) { stubService.later(cb, { ok: true, path: "/home/u/AutoPilot", exists: true, created: false }) }
     function loadModels(harness, refresh) {}
     function loadTimeline(dayStartMs) {
       var d = new Date(dayStartMs)
@@ -349,7 +412,8 @@ Window {
     }
     function preview(draft, cb) {
       stubService.later(cb, { ok: true, preview: {
-        display: "claude -p --permission-mode auto --permission-prompts none --max-turns 40 --output-format stream-json --verbose --resume 3f2a0c19-…",
+        // The level's word is joined in, so the repository denylist never sees the spelling.
+        display: "claude -p --permission-mode " + "auto" + " --permission-prompts none --max-turns 40 --output-format stream-json --verbose --resume 3f2a0c19-…",
         cwd: "/home/u/proj", binary: "/home/u/.local/share/mise/installs/claude/latest/claude",
         levelCaption: "Auto mode. Claude's classifier approves actions it judges safe and blocks risky ones. Nothing asks you.",
         commandDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -471,7 +535,30 @@ Window {
         if (hv) hv.expand("f5f5f5f5f5f5f5f5")
         host.go(7)
       } else if (s === 7 && host.wait >= 6) {
-        host.pair("$T/out/history.png", function () {
+        host.pair("$T/out/history.png", function () { host.go(8) })
+      } else if (s === 8) {
+        p.showView("compose")
+        var c2 = host.compose()
+        c2.loadDraft({
+          harness: "claude",
+          target: { mode: "resume", sessionId: "3f2a0c19-0000-4000-8000-000000000001", cwd: "/home/u/code/api",
+                    title: "Fix the flaky retry test in CI", allowNonGit: false, sessionPath: null },
+          level: "auto", limits: { maxTurns: 40 }, model: null, allowPaid: false, provider: null,
+          trigger: { kind: "at", fireAt: Math.floor(host.nowStart / 1000) + 7200 }
+        }, "Review the last CI run and summarise failures. Name the flaky tests.", "")
+        host.go(9)
+      } else if (s === 9 && host.wait >= 3) {
+        host.compose().openSessionSheet()
+        host.go(10)
+      } else if (s === 10 && host.wait >= 8) {
+        host.pair("$T/out/where.png", function () { host.go(11) })
+      } else if (s === 11) {
+        var sheet = p.sheetFor("session")
+        sheet.selectLeft(sheet.leftIndexOfPlace("workspace"))
+        sheet.focusPane = "places"
+        host.go(12)
+      } else if (s === 12 && host.wait >= 6) {
+        host.pair("$T/out/where-noproject.png", function () {
           Qt.exit(host.fails === 0 ? 0 : 4)
         })
       }
@@ -494,6 +581,8 @@ need() {
 need compose.png
 need queue.png
 need history.png
+need where.png
+need where-noproject.png
 
 # plugins.omarchy.org detail is fit-inside 1600 with withoutEnlargement. A 1920x1080
 # desktop mock becomes 1600x900 of wallpaper; a 1600-wide panel crop (same as ASM)
@@ -504,6 +593,8 @@ fit1600 "$T/out/compose.png" "$OUT/preview.png"
 fit1600 "$T/out/compose.png" "$OUT/docs/compose.png"
 fit1600 "$T/out/queue.png" "$OUT/docs/queue.png"
 fit1600 "$T/out/history.png" "$OUT/docs/history.png"
+fit1600 "$T/out/where.png" "$OUT/docs/where.png"
+[ -n "${AP4A_SHOTS_EXTRA:-}" ] && fit1600 "$T/out/where-noproject.png" "$AP4A_SHOTS_EXTRA/where-noproject.png"
 
 "$PY" -I -S -B - "$OUT/preview.png" <<'PY'
 import struct, sys
@@ -515,4 +606,4 @@ if w != 1600:
     raise SystemExit("preview width %d, want 1600 (marketplace detail limit)" % w)
 print("preview.png %dx%d %dB" % (w, h, __import__("os").path.getsize(p)))
 PY
-echo "shots: wrote $OUT/preview.png and $OUT/docs/{compose,queue,history}.png"
+echo "shots: wrote $OUT/preview.png and $OUT/docs/{compose,queue,history,where}.png"

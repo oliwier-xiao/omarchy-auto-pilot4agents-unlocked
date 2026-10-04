@@ -93,12 +93,13 @@ PROMPT_KEEP_OPEN_S = 86400          # attention/disarmed jobs keep the prompt th
 CLOSED_RETENTION_S = 30 * 86400     # closed jobs pruned after this (Decision)
 OUTPUT_CAP = {"list": 1048576, "job-get": 524288, "sessions": 921600, "settings-get": 16384,
               "settings-set": 16384, "copy-resume": 16384, "usage": 131072, "models": 262144,
-              "timeline": 262144}
+              "timeline": 262144, "dirs": 262144}
 OUTPUT_CAP_DEFAULT = 65536
 VERB_DEADLINE_S = {"edition": 2, "list": 4, "job-get": 4, "job-create": 8, "job-update": 25, "job-delete": 6,
                    "preview": 12, "arm": 40, "run-now": 40, "disarm": 25, "cancel-all": 90, "reschedule": 25,
                    "swap": 40, "shift": 85, "reconcile": 60, "settings-get": 2, "settings-set": 4,
-                   "copy-resume": 3, "sessions": 8, "usage": 3, "agents": 30, "models": 25, "timeline": 4}
+                   "copy-resume": 3, "sessions": 8, "usage": 3, "agents": 30, "models": 25, "timeline": 4,
+                   "dirs": 3, "workspace": 3}
 
 USAGE_RECORDS_MAX = 32
 USAGE_RESET_HORIZON_S = 45 * 86400
@@ -156,6 +157,13 @@ CLAUDE_SCAN_ENTRIES = 2000
 OPENCODE_DB_CEILING = 8 * 1024 ** 3
 SQLITE_DEADLINE_S = 3.0
 SESSIONS_DEADLINE_S = 6.0
+
+# The picker's folder tree: one folder at a time, inside the home folder only.
+DIRS_SCAN_ENTRIES = 4000            # entries looked at in one folder, files included
+DIRS_LIST_MAX = 400                 # subfolders answered
+DIRS_DEADLINE_S = 2.0
+# The No project folder: ~/AutoPilot, made on request, the only folder made outside the state folder.
+WORKSPACE_NAME = "AutoPilot"
 
 # Bounds of the shift verb (edition caps shiftMaxIds / shiftRangeSec).
 SHIFT_MAX_IDS = 50

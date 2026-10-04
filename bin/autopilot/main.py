@@ -32,6 +32,8 @@ VERBS = {
     "settings-set": ("cli_core", "cmd_settings_set", True),
     "copy-resume": ("cli_core", "cmd_copy_resume", False),
     "sessions": ("cli_scan", "cmd_sessions", False),
+    "dirs": ("cli_scan", "cmd_dirs", False),
+    "workspace": ("cli_scan", "cmd_workspace", False),
     "usage": ("cli_scan", "cmd_usage", False),
     "timeline": ("cli_scan", "cmd_timeline", False),
     "agents": ("cli_scan", "cmd_agents", False),
@@ -88,12 +90,12 @@ def _epoch_ok(value):
 
 
 def _check_sessions(argv):
-    """sessions [--harness <h>] [--cwd <abs>]: each flag at most once, --harness first."""
+    """sessions [--harness <h>] [--cwd <abs> | --in <abs>]: each flag at most once, --harness first."""
     rest = list(argv)
     if rest[:1] == ["--harness"]:
         _need(len(rest) >= 2 and rest[1] in consts.HARNESSES)
         rest = rest[2:]
-    if rest[:1] == ["--cwd"]:
+    if rest[:1] in (["--cwd"], ["--in"]):
         _need(len(rest) >= 2 and _cwd_ok(rest[1]))
         rest = rest[2:]
     _need(not rest)
@@ -124,6 +126,10 @@ def check_argv(verb, argv):
         _need(len(set(ids)) == len(ids))
     elif verb == "sessions":
         _check_sessions(argv)
+    elif verb == "dirs":
+        _need(count == 2 and argv[0] == "--path" and _cwd_ok(argv[1]))
+    elif verb == "workspace":
+        _need(count == 0 or argv == ["--create"])
     elif verb == "models":
         _need(count in (2, 3) and argv[0] == "--harness" and argv[1] in consts.HARNESSES)
         _need(count == 2 or argv[2] == "--refresh")

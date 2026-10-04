@@ -1,13 +1,13 @@
-"""Verbs that describe the machine: sessions, usage, timeline, agents.
+"""Verbs that describe the machine: sessions, dirs, workspace, usage, timeline, agents.
 
 None of them take stdin or hold the jobs lock. The only state they change is the agents version
 cache and, for `usage`, the limits history and the last good Cursor record (both best effort,
-under limits.lock or by atomic replace).
+under limits.lock or by atomic replace). `workspace --create` makes the No project folder.
 """
 
 import re
 
-from . import agents, consts, fsio, limits_history, sessions, timeutil, usage, windows
+from . import agents, consts, folders, fsio, limits_history, sessions, timeutil, usage, windows
 from .errors import ApError
 
 _EPOCH_RE = re.compile(r"^[0-9]{1,10}$")
@@ -36,24 +36,50 @@ def _state_or_none():
 
 
 def cmd_sessions(argv, payload):
-    """sessions [--harness <harness>] [--cwd <abs>] -> Sessions v2 (delta 3.12)."""
+    """sessions [--harness <harness>] [--cwd <abs> | --in <abs>] -> Sessions v2 (delta 3.12).
+
+    --cwd scopes Pi to one folder and leaves every other agent as it is; --in answers only the
+    sessions recorded in that one folder, for every agent.
+    """
     args = list(argv or [])
-    harness = cwd = None
+    harness = cwd = only = None
     if args[:1] == ["--harness"]:
         if len(args) < 2 or args[1] not in consts.HARNESSES:
             raise ApError("bad_args")
         harness = args[1]
         args = args[2:]
-    if args[:1] == ["--cwd"]:
+    if args[:1] in (["--cwd"], ["--in"]):
         if len(args) < 2 or not _cwd_ok(args[1]):
             raise ApError("bad_args")
-        cwd = args[1]
+        if args[0] == "--cwd":
+            cwd = args[1]
+        else:
+            only = args[1]
         args = args[2:]
     if args:
         raise ApError("bad_args")
-    extra = {"cwd": cwd} if cwd is not None else {}
+    extra = {}
+    if cwd is not None:
+        extra["cwd"] = cwd
+    if only is not None:
+        extra["only"] = only
     result = sessions.list_sessions(harness, timeutil.now(), **extra)
     return dict({"ok": True}, **result)
+
+
+def cmd_dirs(argv, payload):
+    """dirs --path <abs> -> the subfolders of one folder inside the home folder."""
+    args = list(argv or [])
+    if len(args) != 2 or args[0] != "--path" or not _cwd_ok(args[1]):
+        raise ApError("bad_args")
+    return dict({"ok": True}, **folders.list_dirs(args[1]))
+
+
+def cmd_workspace(argv, payload):
+    """workspace [--create] -> the No project folder, made first with --create."""
+    if argv and argv != ["--create"]:
+        raise ApError("bad_args")
+    return dict({"ok": True}, **folders.workspace(bool(argv)))
 
 
 def cmd_usage(argv, payload):

@@ -437,7 +437,8 @@ Item {
 
   function openSessionSheet() {
     root.leaveEditor()
-    root.sheetRequested("session", { harness: root.harness, cwd: typeof root.target.cwd === "string" ? root.target.cwd : "" })
+    root.sheetRequested("session", { harness: root.harness, cwd: typeof root.target.cwd === "string" ? root.target.cwd : "",
+                                     sessionId: typeof root.target.sessionId === "string" ? root.target.sessionId : "" })
   }
 
   function openModelSheet(query) {

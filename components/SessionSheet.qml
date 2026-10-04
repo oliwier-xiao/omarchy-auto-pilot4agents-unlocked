@@ -6,17 +6,28 @@ import qs.Ui
 import "../lib/Edition.js" as Edition
 import "../lib/Model.js" as Model
 
-// Which session the prompt goes to. An in-card overlay over the view area, modal
-// while it is up (R6 8.4): type to filter, Left and Right pick the agent, Up and
-// Down pick the row, Enter resumes it, Ctrl+N starts a new session in that row's
-// folder. Row 0 is always the new-session action; typing a folder path (/... or
-// ~/...) points it at that folder.
+// Where the prompt runs, and how. An in-card overlay over the view area, modal while it
+// is up (R6 8.4), in two panes:
 //
-// Everything listed comes from `ap4a sessions`, a bounded read; the sheet says what
-// the bound left out instead of pretending the list is complete. Pi keeps its sessions
-// per folder, so they are listed for one folder at a time: the draft's folder (or the
-// home folder), or the folder typed into the filter. Cursor lists only the chats Auto
-// Pilot itself started.
+//   - Places and folders, on the left: No project (~/AutoPilot, made when it is first
+//     picked), All recent sessions, the folders that have sessions lately, and the folder
+//     tree of the home folder, read one folder at a time through `ap4a dirs`. Each folder
+//     carries the marks of the agents that have sessions in it.
+//   - Sessions, on the right: what the chosen place holds. Row 0 starts a new session
+//     there; Enter resumes the highlighted session and Ctrl+F forks it.
+//
+// The place on the right follows the left cursor when the keyboard moves it, and a click.
+// Hover only moves the highlight, so passing the pointer over the tree never re-reads.
+// Typing filters the sessions; typing a folder path (/... or ~/...) points both panes at
+// that folder. Tab moves between the panes. The home folder itself is browsable but is
+// never a working folder; No project is the place for work that needs none.
+//
+// Everything listed comes from bounded helper reads; the sheet says what a bound left out
+// instead of pretending a list is complete. All recent sessions is the newest 50 per agent;
+// a folder's own list (`sessions --in`) reads that folder for every agent and replaces the
+// recent rows of that folder once it lands. Pi keeps its sessions per folder, so the recent
+// list holds Pi's sessions for one folder at a time. Cursor lists only the chats Auto Pilot
+// itself started.
 Item {
   id: root
 
@@ -26,6 +37,8 @@ Item {
   property string home: ""
   property string initialHarness: ""
   property string initialCwd: ""
+  // The session the draft already points at, marked with a check.
+  property string initialSessionId: ""
 
   signal picked(var selection)
   signal closed()
@@ -37,28 +50,100 @@ Item {
   // The folder the last sessions read was scoped to (Pi lists only that folder).
   property string _listedCwd: ""
 
-  readonly property string hints: "Type to filter  ·  ←/→ agent  ·  ↑/↓ choose  ·  Enter pick  ·  Ctrl+N new session  ·  Esc back"
+  // "list" (sessions, the default) or "places" (places and folders).
+  property string focusPane: "list"
+  property int leftCursor: 1
+  // "recent", "workspace" or "folder"; placePath is the folder ("" for recent).
+  property string placeKind: "recent"
+  property string placePath: ""
+  // path -> true for every open folder of the tree.
+  property var expanded: ({})
+  property bool showHidden: false
+  // A folder the left cursor moves to once its row exists (a typed path, the draft's folder).
+  property string _reveal: ""
+  // The right cursor was moved by hand since the place changed.
+  property bool _cursorTouched: false
+  // leftKeyOf the row under the left cursor.
+  property string _leftKey: ""
+
+  readonly property var glyph: ({
+    folder: "\uDB80\uDE4B",       // md-folder                     U+F024B
+    folderOpen: "\uDB81\uDF70",   // md-folder_open                U+F0770
+    home: "\uDB80\uDEDC",         // md-home                       U+F02DC
+    workspace: "\uDB83\uDDC9",    // md-file_document_edit_outline U+F0DC9
+    recent: "\uDB80\uDEDA",       // md-history                    U+F02DA
+    down: "\uDB80\uDD40",         // md-chevron_down               U+F0140
+    right: "\uDB80\uDD42",        // md-chevron_right              U+F0142
+    git: "\uDB80\uDEA2",          // md-git                        U+F02A2
+    link: "\uDB80\uDF39",         // md-link_variant               U+F0339
+    lock: "\uDB80\uDF41",         // md-lock_outline               U+F0341
+    check: "\uDB80\uDD2C"         // md-check                      U+F012C
+  })
+
+  readonly property string hints: root.focusPane === "places"
+    ? "↑/↓ choose  ·  ←/→ close or open  ·  Enter sessions  ·  Ctrl+H hidden folders  ·  Ctrl+N new session here  ·  Tab sessions  ·  Esc back"
+    : "Type to filter  ·  ←/→ agent  ·  ↑/↓ choose  ·  Enter pick  ·  Ctrl+F fork  ·  Ctrl+N new session  ·  Tab folders  ·  Esc back"
 
   readonly property var filters: ["all"].concat(Edition.HARNESS_IDS)
-  readonly property var result: root.service && root.service.sessions && root.service.sessions["all"]
+  readonly property var allResult: root.service && root.service.sessions && root.service.sessions["all"]
     ? root.service.sessions["all"] : null
-  readonly property bool loading: root.result === null && !!root.service && root.service.loadingSessions === true
-  readonly property var allRows: root.result && Array.isArray(root.result.sessions) ? root.result.sessions : []
+  readonly property var allRows: root.allResult && Array.isArray(root.allResult.sessions) ? root.allResult.sessions : []
   readonly property string queryPath: root.expandPath(root.query)
+
+  // ---------------------------------------------------------------- the place
+
+  readonly property string workspacePath: root.service && root.service.workspace && typeof root.service.workspace.path === "string"
+    ? root.service.workspace.path : Model.workspacePath(root.home)
+  readonly property bool workspaceExists: !!root.service && !!root.service.workspace && root.service.workspace.exists === true
+
+  // A typed folder path wins over the chosen place while it is typed.
+  readonly property string activePath: root.queryPath !== "" ? root.queryPath : root.placePath
+  readonly property string activeKind: root.activePath === "" ? "recent"
+    : (root.activePath === root.workspacePath ? "workspace" : (root.activePath === root.home ? "home" : "folder"))
+
+  // Every folder list (`sessions --in`) read since the sheet opened, by folder, so going
+  // back to a folder is instant and its marks keep their counts after another one is read.
+  property var _folderLists: ({})
+  readonly property var latestIn: root.service && root.service.sessions ? root.service.sessions["in"] : null
+  onLatestInChanged: {
+    var r = root.latestIn
+    if (!r || r.ok !== true || typeof r["in"] !== "string" || r["in"] === "") return
+    var next = {}
+    for (var k in root._folderLists) next[k] = root._folderLists[k]
+    next[r["in"]] = r
+    root._folderLists = next
+  }
+
+  // The folder's own list, once `sessions --in` answered for this very folder.
+  readonly property var inResult: root.activePath !== "" && root._folderLists.hasOwnProperty(root.activePath)
+    ? root._folderLists[root.activePath] : null
+  readonly property var result: root.inResult !== null ? root.inResult : root.allResult
+  readonly property bool loading: root.allResult === null && !!root.service && root.service.loadingSessions === true
+  readonly property bool folderLoading: root.activePath !== "" && root.inResult === null && !!root.service
+    && typeof root.service.loadFolderSessions === "function" && root.service.loadingSessions === true
+
+  // Sessions of the place before the agent filter and the words.
+  readonly property var placeRows: {
+    if (root.activeKind === "recent") return root.allRows
+    if (root.activeKind === "home") return []
+    var source = root.inResult !== null && Array.isArray(root.inResult.sessions) ? root.inResult.sessions : root.allRows
+    var out = []
+    for (var i = 0; i < source.length; i++) {
+      var r = source[i]
+      if (r && String(r.cwd || "") === root.activePath) out.push(r)
+    }
+    return out
+  }
 
   readonly property var rows: {
     var out = []
-    var path = root.queryPath
     var q = root.query.trim().toLowerCase()
-    var words = path !== "" || q === "" ? [] : q.split(/\s+/)
-    for (var i = 0; i < root.allRows.length; i++) {
-      var r = root.allRows[i]
+    var words = root.queryPath !== "" || q === "" ? [] : q.split(/\s+/)
+    for (var i = 0; i < root.placeRows.length; i++) {
+      var r = root.placeRows[i]
       if (!r || typeof r.id !== "string" || Edition.HARNESS_IDS.indexOf(r.harness) < 0) continue
       if (root.filter !== "all" && r.harness !== root.filter) continue
-      if (path !== "") {
-        var cwd = String(r.cwd || "")
-        if (cwd !== path && cwd.indexOf(path + "/") !== 0) continue
-      } else if (words.length > 0) {
+      if (words.length > 0) {
         var hay = [r.title, r.cwd, Model.shortPath(r.cwd, root.home), Model.harnessName(r.harness)]
           .map(function (v) { return v === undefined || v === null ? "" : String(v) }).join("\n").toLowerCase()
         var hit = true
@@ -74,7 +159,258 @@ Item {
   readonly property int rowCount: root.rows.length + 1
   readonly property string newHarness: root.filter !== "all" ? root.filter
     : (Edition.HARNESS_IDS.indexOf(root.initialHarness) >= 0 ? root.initialHarness : Edition.HARNESS_IDS[0])
-  readonly property string newCwd: root.queryPath !== "" ? root.queryPath : (root.initialCwd !== "" ? root.initialCwd : root.home)
+  readonly property string newCwd: root.activePath !== "" ? root.activePath : (root.initialCwd !== "" ? root.initialCwd : root.home)
+
+  // cwd -> {total, by: {harness: n}}, over the recent rows and every folder list read.
+  readonly property var countsByCwd: {
+    var out = {}
+    var seen = {}
+    var lists = [root.allRows]
+    for (var f in root._folderLists)
+      if (Array.isArray(root._folderLists[f].sessions)) lists.push(root._folderLists[f].sessions)
+    for (var l = 0; l < lists.length; l++) {
+      for (var i = 0; i < lists[l].length; i++) {
+        var r = lists[l][i]
+        if (!r || typeof r.cwd !== "string" || Edition.HARNESS_IDS.indexOf(r.harness) < 0) continue
+        var key = r.harness + " " + r.id
+        if (seen[key] === true) continue
+        seen[key] = true
+        var c = out[r.cwd] || { total: 0, by: {} }
+        c.total += 1
+        c.by[r.harness] = (c.by[r.harness] || 0) + 1
+        out[r.cwd] = c
+      }
+    }
+    return out
+  }
+
+  // Up to four folders with the newest sessions, other than the home folder and No project.
+  readonly property var recentFolders: {
+    var latest = {}
+    for (var i = 0; i < root.allRows.length; i++) {
+      var r = root.allRows[i]
+      if (!r || typeof r.cwd !== "string" || r.cwd === "" || r.cwd === root.home || r.cwd === root.workspacePath) continue
+      var t = Number(r.updatedAtMs) || 0
+      if (!latest.hasOwnProperty(r.cwd) || latest[r.cwd] < t) latest[r.cwd] = t
+    }
+    var paths = Object.keys(latest)
+    paths.sort(function (a, b) { return latest[b] - latest[a] })
+    return paths.slice(0, 4)
+  }
+
+  // ---------------------------------------------------------------- the left pane
+
+  // Flat rows: places, recent folders, then the tree from the home folder. Only "place",
+  // "recent" and "dir" rows with a path take the cursor; "head" and "note" rows explain.
+  readonly property var leftRows: {
+    var out = [
+      { kind: "place", id: "workspace", path: root.workspacePath, depth: 0 },
+      { kind: "place", id: "recent", path: "", depth: 0 }
+    ]
+    var rec = root.recentFolders
+    if (rec.length > 0) {
+      out.push({ kind: "head", text: "Recent folders", depth: 0 })
+      for (var i = 0; i < rec.length; i++) out.push({ kind: "recent", path: rec[i], name: root.basename(rec[i]), depth: 0 })
+    }
+    out.push({ kind: "head", text: "Folders", depth: 0 })
+    if (root.home !== "") root.appendTree(out, root.home, 0, "~", null, {})
+    return out
+  }
+
+  function appendTree(out, path, depth, name, entry, branch) {
+    var open = root.expanded[path] === true
+    out.push({ kind: "dir", path: path, name: name, depth: depth, expanded: open,
+               git: !!entry && entry.git === true, link: !!entry && entry.link === true,
+               own: !entry || entry.own !== false, hidden: !!entry && entry.hidden === true })
+    if (!open || out.length > 1500) return
+    var inner = {}
+    for (var b in branch) inner[b] = true
+    inner[path] = true
+    var d = root.service && root.service.dirs ? root.service.dirs[path] : undefined
+    if (d === undefined) {
+      out.push({ kind: "note", text: "Reading " + Model.shortPath(path, root.home) + "…", depth: depth + 1 })
+      return
+    }
+    if (d.ok !== true || d.state === "denied") {
+      out.push({ kind: "note", text: "This folder cannot be read.", depth: depth + 1, warn: true })
+      return
+    }
+    if (d.state === "missing") {
+      out.push({ kind: "note", text: "This folder is gone.", depth: depth + 1, warn: true })
+      return
+    }
+    var entries = Array.isArray(d.entries) ? d.entries : []
+    var shown = 0, hidden = 0
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]
+      if (!e || typeof e.name !== "string") continue
+      if (e.hidden === true && !root.showHidden) { hidden++; continue }
+      shown++
+      if (e.link === true && typeof e.target !== "string") {
+        out.push({ kind: "dir", path: "", name: e.name, depth: depth + 1, expanded: false, git: false, link: true,
+                   own: true, hidden: e.hidden === true, outside: true })
+        continue
+      }
+      var child = e.link === true ? e.target : (path === "/" ? "/" : path + "/") + e.name
+      if (inner[child] === true) continue
+      root.appendTree(out, child, depth + 1, e.name, e, inner)
+    }
+    if (shown === 0)
+      out.push({ kind: "note", text: hidden > 0 ? "Only hidden folders. Ctrl+H shows them." : "No folders inside.", depth: depth + 1 })
+    if (d.truncated === true)
+      out.push({ kind: "note", text: "Only the first " + entries.length + " folders are listed.", depth: depth + 1 })
+  }
+
+  function leftTakesCursor(row) {
+    if (!row) return false
+    if (row.kind === "place" || row.kind === "recent") return true
+    return row.kind === "dir" && row.path !== ""
+  }
+
+  // The place a left row stands for, as {kind, path}.
+  function placeOf(row) {
+    if (!row) return null
+    if (row.kind === "place") return row.id === "recent" ? { kind: "recent", path: "" } : { kind: "workspace", path: root.workspacePath }
+    if (row.path === "") return null
+    return { kind: row.path === root.workspacePath ? "workspace" : "folder", path: row.path }
+  }
+
+  // The one left row marked as the place on the right: the row under the cursor when it is
+  // that place, else the first row that is.
+  readonly property int placeRowIndex: {
+    if (root.rowIsPlace(root.leftRows[root.leftCursor])) return root.leftCursor
+    for (var i = 0; i < root.leftRows.length; i++) if (root.rowIsPlace(root.leftRows[i])) return i
+    return -1
+  }
+
+  function rowIsPlace(row) {
+    var p = root.placeOf(row)
+    if (p === null) return false
+    if (root.queryPath !== "") return p.kind !== "recent" && p.path === root.queryPath
+    return p.kind === root.placeKind && p.path === root.placePath
+  }
+
+  // A left row's identity, so the cursor stays on its row when rows above it come and go.
+  function leftKeyOf(row) {
+    if (!row) return ""
+    return row.kind + ":" + (row.kind === "place" ? row.id : String(row.path || ""))
+  }
+
+  function setPlace(kind, path) {
+    if (root.placeKind === kind && root.placePath === path) return
+    root.placeKind = kind
+    root.placePath = path
+    root._cursorTouched = false
+    root.resetCursor()
+    if (path !== "") folderRead.restart()
+  }
+
+  function selectLeft(index) {
+    if (index < 0 || index >= root.leftRows.length || !root.leftTakesCursor(root.leftRows[index])) return
+    root.leftCursor = index
+    var p = root.placeOf(root.leftRows[index])
+    if (p === null) return
+    if (root.query !== "" && root.queryPath !== "") root.query = ""
+    root.setPlace(p.kind, p.path)
+  }
+
+  function moveLeft(delta) {
+    var i = root.leftCursor
+    var step = delta < 0 ? -1 : 1
+    var left = Math.abs(delta)
+    var target = i
+    while (left > 0) {
+      var j = target + step
+      while (j >= 0 && j < root.leftRows.length && !root.leftTakesCursor(root.leftRows[j])) j += step
+      if (j < 0 || j >= root.leftRows.length) break
+      target = j
+      left--
+    }
+    if (target !== i) root.selectLeft(target)
+  }
+
+  function setExpanded(path, open) {
+    if (path === "") return
+    var next = {}
+    for (var k in root.expanded) if (k !== path) next[k] = true
+    if (open) next[path] = true
+    root.expanded = next
+    if (open) root.readDirs(path)
+  }
+
+  function readDirs(path) {
+    if (!root.service || typeof root.service.loadDirs !== "function") return
+    var d = root.service.dirs ? root.service.dirs[path] : undefined
+    if (d === undefined || d.ok !== true) root.service.loadDirs(path)
+  }
+
+  // Opens every folder from the home folder down to path's parent, and moves the left
+  // cursor to path once its row is listed.
+  function reveal(path) {
+    if (root.home === "" || path === "" || (path !== root.home && path.indexOf(root.home + "/") !== 0)) return
+    var parts = path.slice(root.home.length).split("/").filter(function (s) { return s !== "" })
+    var next = {}
+    for (var k in root.expanded) next[k] = true
+    var at = root.home
+    next[at] = true
+    root.readDirs(at)
+    for (var i = 0; i < parts.length - 1; i++) {
+      at = at + "/" + parts[i]
+      next[at] = true
+      root.readDirs(at)
+    }
+    root.expanded = next
+    root._reveal = path
+    root.applyReveal()
+  }
+
+  function applyReveal() {
+    if (root._reveal === "") return
+    for (var i = 0; i < root.leftRows.length; i++) {
+      var r = root.leftRows[i]
+      if (r.kind === "dir" && r.path === root._reveal) {
+        root.leftCursor = i
+        root._reveal = ""
+        return
+      }
+    }
+  }
+
+  function leftIndexOfPlace(id) {
+    for (var i = 0; i < root.leftRows.length; i++)
+      if (root.leftRows[i].kind === "place" && root.leftRows[i].id === id) return i
+    return 0
+  }
+
+  // Right: open a closed folder, then step into it. Left: close an open folder, then go
+  // to its parent.
+  function stepTree(dir) {
+    var r = root.leftRows[root.leftCursor]
+    if (!r) return
+    if (r.kind !== "dir") {
+      if (dir > 0) root.focusPane = "list"
+      return
+    }
+    if (dir > 0) {
+      if (r.outside === true || r.path === "") return
+      if (!r.expanded) root.setExpanded(r.path, true)
+      else root.moveLeft(1)
+      return
+    }
+    if (r.expanded) {
+      root.setExpanded(r.path, false)
+      return
+    }
+    for (var i = root.leftCursor - 1; i >= 0; i--) {
+      var up = root.leftRows[i]
+      if (up.kind === "dir" && up.depth === r.depth - 1) {
+        root.selectLeft(i)
+        return
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- captions
 
   readonly property string boundLine: {
     if (root.result === null) return ""
@@ -104,14 +440,51 @@ Item {
     return out.join(" ")
   }
 
-  // Which folder Pi's sessions are listed for, and how to list another.
+  // Which folder Pi's sessions are listed for, and how to list another. A folder's own
+  // list already holds its Pi sessions.
   readonly property string piLine: {
-    if (root.result === null || (root.filter !== "all" && root.filter !== "pi")) return ""
+    if (root.result === null || root.inResult !== null || (root.filter !== "all" && root.filter !== "pi")) return ""
     if (Array.isArray(root.result.needsCwd) && root.result.needsCwd.indexOf("pi") >= 0) return "Type a folder path to list Pi sessions."
     if (typeof root.result.cwd === "string" && root.result.cwd !== "")
       return "Pi sessions are listed for " + Model.shortPath(root.result.cwd, root.home) + " only. Type a folder path to list another."
     return ""
   }
+
+  readonly property string placeTitle: {
+    if (root.activeKind === "recent") return "All recent sessions"
+    if (root.activeKind === "workspace") return "No project"
+    if (root.activeKind === "home") return "Home"
+    return root.basename(root.activePath)
+  }
+
+  // Facts about the folder from the tree listing of its parent (or its own).
+  readonly property var activeEntry: {
+    var p = root.activePath
+    if (p === "" || !root.service || !root.service.dirs) return null
+    var own = root.service.dirs[p]
+    var slash = p.lastIndexOf("/")
+    var parent = root.service.dirs[slash > 0 ? p.slice(0, slash) : "/"]
+    var name = p.slice(slash + 1)
+    if (parent && Array.isArray(parent.entries))
+      for (var i = 0; i < parent.entries.length; i++) if (parent.entries[i].name === name) return parent.entries[i]
+    return own && own.ok === true ? { git: own.git === true, own: own.own !== false } : null
+  }
+
+  readonly property string placeFact: {
+    if (root.activeKind === "recent") return "Every folder, newest first."
+    if (root.activeKind === "home") return "Agents do not start in your home folder itself. Pick a folder inside it, or No project."
+    if (root.activeKind === "workspace")
+      return root.workspaceExists ? "For work without a project. Agents start here and keep their files here."
+        : "For work without a project. Made when you start a session here; agents keep their files in it."
+    var parts = []
+    if (root.activeEntry && root.activeEntry.git === true) parts.push("git")
+    if (root.activeEntry && root.activeEntry.own === false) parts.push("owned by another user, agents cannot start here")
+    var n = root.placeRows.length
+    parts.push(root.folderLoading && n === 0 ? "reading sessions…" : (n === 1 ? "1 session" : n + " sessions"))
+    return parts.join("  ·  ")
+  }
+
+  // ---------------------------------------------------------------- helpers
 
   function expandPath(text) {
     var t = String(text || "").trim()
@@ -125,13 +498,30 @@ Item {
   }
 
   function countFor(id) {
-    var c = root.result && root.result.counts ? root.result.counts : {}
-    if (id === "all") {
-      var n = 0
-      for (var k in c) if (typeof c[k] === "number") n += c[k]
-      return n
+    if (id === "all") return root.placeRows.length
+    var n = 0
+    for (var i = 0; i < root.placeRows.length; i++) if (root.placeRows[i] && root.placeRows[i].harness === id) n++
+    return n
+  }
+
+  // [{harness, n}] in agent order, for the marks beside a folder.
+  function marksFor(path) {
+    var c = root.countsByCwd[path]
+    var out = []
+    if (!c) return out
+    for (var i = 0; i < Edition.HARNESS_IDS.length; i++) {
+      var h = Edition.HARNESS_IDS[i]
+      if (c.by[h] > 0) out.push({ harness: h, n: c.by[h] })
     }
-    return typeof c[id] === "number" ? c[id] : 0
+    return out
+  }
+
+  // Sessions in the folders below path (not in path itself).
+  function countBelow(path) {
+    if (path === "") return 0
+    var n = 0
+    for (var cwd in root.countsByCwd) if (cwd.indexOf(path + "/") === 0) n += root.countsByCwd[cwd].total
+    return n
   }
 
   function basename(path) {
@@ -159,20 +549,46 @@ Item {
     var a = args && typeof args === "object" ? args : {}
     root.initialHarness = Edition.HARNESS_IDS.indexOf(a.harness) >= 0 ? a.harness : ""
     root.initialCwd = typeof a.cwd === "string" ? a.cwd : ""
+    root.initialSessionId = typeof a.sessionId === "string" ? a.sessionId : ""
     root.query = ""
     root.filter = root.initialHarness !== "" ? root.initialHarness : "all"
+    root.focusPane = "list"
+    root.showHidden = false
+    root._reveal = ""
+    root._cursorTouched = false
+    root._folderLists = ({})
+    var opened = {}
+    if (root.home !== "") opened[root.home] = true
+    root.expanded = opened
+    if (root.service && typeof root.service.clearDirs === "function") root.service.clearDirs()
+    if (root.home !== "") root.readDirs(root.home)
+    if (root.service && typeof root.service.loadWorkspace === "function") root.service.loadWorkspace(false, null)
+    var start = root.initialCwd !== "" && root.initialCwd !== root.home ? root.initialCwd : ""
+    root.placeKind = start === "" ? "recent" : (start === root.workspacePath ? "workspace" : "folder")
+    root.placePath = start
+    root.leftCursor = root.leftIndexOfPlace(start !== "" && start === root.workspacePath ? "workspace" : "recent")
+    if (start !== "" && start !== root.workspacePath) root.reveal(start)
     root.resetCursor()
     root._listedCwd = root.initialCwd !== "" ? root.initialCwd : root.home
     if (root.service && typeof root.service.loadSessions === "function") root.service.loadSessions("", root._listedCwd)
+    if (start !== "") folderRead.restart()
   }
 
   // A typed folder lists Pi's sessions there too (every other agent's rows are already
-  // filtered by it).
+  // filtered by it), reads that folder's own list, and opens the tree down to it.
   function reloadForPath() {
     var p = root.queryPath
-    if (!root.active || p === "" || p === "/" || p === root._listedCwd) return
+    if (!root.active || p === "" || p === "/") return
+    root.reveal(p)
+    root.readFolder(p)
+    if (p === root._listedCwd) return
     root._listedCwd = p
     if (root.service && typeof root.service.loadSessions === "function") root.service.loadSessions("", p)
+  }
+
+  function readFolder(path) {
+    if (path === "" || path === root.home || !root.service || typeof root.service.loadFolderSessions !== "function") return
+    root.service.loadFolderSessions(path)
   }
 
   function close() {
@@ -194,10 +610,15 @@ Item {
     return !!a && a.enabled === false
   }
 
-  function pickSession(r) {
+  function pickSession(r, mode) {
     if (!r) return
+    var how = mode === "fork" ? "fork" : "resume"
     if (root.agentBlocked(r.harness)) {
       root.noticeRequested(root.blockedSentence(r.harness), "warn", null)
+      return
+    }
+    if (how === "fork" && r.canFork === false) {
+      root.noticeRequested(Model.harnessName(r.harness) + " sessions cannot be forked. Enter resumes it, or Ctrl+N starts a new one.", "warn", null)
       return
     }
     // Pi resumes a session by its file, so a row without one cannot be resumed.
@@ -207,17 +628,26 @@ Item {
       return
     }
     root.picked({
-      harness: r.harness, mode: "resume", sessionId: r.id, cwd: r.cwd,
+      harness: r.harness, mode: how, sessionId: r.id, cwd: r.cwd,
       title: typeof r.title === "string" ? r.title : "",
       updatedAtMs: r.updatedAtMs, messages: r.messages, sessionPath: path
     })
   }
 
-  // fromRow: Ctrl+N, a new session in the highlighted row's folder.
+  function pickFork() {
+    if (root.cursor > 0) root.pickSession(root.rows[root.cursor - 1], "fork")
+    else root.noticeRequested("Ctrl+F forks the highlighted session. Pick one with ↑/↓ first.", "warn", null)
+  }
+
+  // fromRow: Ctrl+N, a new session in the highlighted row's folder (the left row's folder
+  // when the left pane has the cursor).
   function pickNew(fromRow) {
     var cwd = root.newCwd
     var harness = root.newHarness
-    if (fromRow && root.cursor > 0) {
+    if (fromRow && root.focusPane === "places") {
+      var p = root.placeOf(root.leftRows[root.leftCursor])
+      if (p !== null && p.path !== "") cwd = p.path
+    } else if (fromRow && root.cursor > 0) {
       var r = root.rows[root.cursor - 1]
       if (r) {
         cwd = String(r.cwd || "")
@@ -230,29 +660,47 @@ Item {
     }
     // The helper never starts a session in the home folder itself; say so before asking it.
     if (cwd === root.home) {
-      root.noticeRequested("Type a folder such as ~/proj/api. Your home folder itself is not allowed.", "warn", null)
+      root.noticeRequested("Your home folder itself is not allowed. Pick a folder inside it, or No project.", "warn", null)
       return
     }
     if (root.agentBlocked(harness)) {
       root.noticeRequested(root.blockedSentence(harness), "warn", null)
       return
     }
-    root.picked({ harness: harness, mode: "new", sessionId: null, cwd: cwd, title: root.basename(cwd), sessionPath: null })
+    if (cwd === root.workspacePath && !root.workspaceExists && root.service && typeof root.service.loadWorkspace === "function") {
+      root.service.loadWorkspace(true, function (res) {
+        if (res && res.ok === true && typeof res.path === "string")
+          root.picked({ harness: harness, mode: "new", sessionId: null, cwd: res.path, title: "No project", sessionPath: null })
+        else
+          root.noticeRequested(Model.shortPath(cwd, root.home) + " could not be made. Make the folder yourself, or pick another.", "warn", null)
+      })
+      return
+    }
+    root.picked({ harness: harness, mode: "new", sessionId: null, cwd: cwd,
+                  title: cwd === root.workspacePath ? "No project" : root.basename(cwd), sessionPath: null })
   }
 
   function pickCursor() {
     if (root.cursor <= 0) root.pickNew(false)
-    else root.pickSession(root.rows[root.cursor - 1])
+    else root.pickSession(root.rows[root.cursor - 1], "resume")
   }
 
   function stepFilter(dir) {
     var i = root.filters.indexOf(root.filter)
     root.filter = root.filters[(i + dir + root.filters.length) % root.filters.length]
+    root._cursorTouched = false
     root.resetCursor()
   }
 
   function moveCursor(delta) {
+    root._cursorTouched = true
     root.cursor = Math.max(0, Math.min(root.rowCount - 1, root.cursor + delta))
+  }
+
+  function editQuery(text) {
+    root.query = text
+    root._cursorTouched = false
+    root.resetCursor()
   }
 
   function handleKey(event) {
@@ -263,36 +711,71 @@ Item {
 
     if (key === Qt.Key_Escape) {
       if (root.query === "") return false
-      root.query = ""
-      root.resetCursor()
+      root.editQuery("")
+      return true
+    }
+    if (key === Qt.Key_Tab || key === Qt.Key_Backtab) {
+      root.focusPane = root.focusPane === "places" ? "list" : "places"
       return true
     }
     if (ctrl && key === Qt.Key_N) { root.pickNew(true); return true }
-    if (key === Qt.Key_Return || key === Qt.Key_Enter) { root.pickCursor(); return true }
-    if (key === Qt.Key_Left) { root.stepFilter(-1); return true }
-    if (key === Qt.Key_Right) { root.stepFilter(1); return true }
-    if (key === Qt.Key_Up || (ctrl && key === Qt.Key_P)) { root.moveCursor(-1); return true }
-    if (key === Qt.Key_Down) { root.moveCursor(1); return true }
-    if (key === Qt.Key_PageUp) { root.moveCursor(-8); return true }
-    if (key === Qt.Key_PageDown) { root.moveCursor(8); return true }
-    if (key === Qt.Key_Home) { root.cursor = 0; return true }
-    if (key === Qt.Key_End) { root.cursor = root.rowCount - 1; return true }
+    if (ctrl && key === Qt.Key_H) { root.showHidden = !root.showHidden; return true }
+    if (root.focusPane === "places") {
+      if (key === Qt.Key_Return || key === Qt.Key_Enter) { root.focusPane = "list"; return true }
+      if (key === Qt.Key_Right) { root.stepTree(1); return true }
+      if (key === Qt.Key_Left) { root.stepTree(-1); return true }
+      if (key === Qt.Key_Up || (ctrl && key === Qt.Key_P)) { root.moveLeft(-1); return true }
+      if (key === Qt.Key_Down) { root.moveLeft(1); return true }
+      if (key === Qt.Key_PageUp) { root.moveLeft(-8); return true }
+      if (key === Qt.Key_PageDown) { root.moveLeft(8); return true }
+      if (key === Qt.Key_Home) { root.moveLeft(-root.leftRows.length); return true }
+      if (key === Qt.Key_End) { root.moveLeft(root.leftRows.length); return true }
+    } else {
+      if (ctrl && key === Qt.Key_F) { root.pickFork(); return true }
+      if (key === Qt.Key_Return || key === Qt.Key_Enter) { root.pickCursor(); return true }
+      if (key === Qt.Key_Left) { root.stepFilter(-1); return true }
+      if (key === Qt.Key_Right) { root.stepFilter(1); return true }
+      if (key === Qt.Key_Up || (ctrl && key === Qt.Key_P)) { root.moveCursor(-1); return true }
+      if (key === Qt.Key_Down) { root.moveCursor(1); return true }
+      if (key === Qt.Key_PageUp) { root.moveCursor(-8); return true }
+      if (key === Qt.Key_PageDown) { root.moveCursor(8); return true }
+      if (key === Qt.Key_Home) { root._cursorTouched = true; root.cursor = 0; return true }
+      if (key === Qt.Key_End) { root._cursorTouched = true; root.cursor = root.rowCount - 1; return true }
+    }
     if (Util.editsFilter(event, root.query)) {
-      root.query = Util.editedFilter(event, root.query)
-      root.resetCursor()
+      root.editQuery(Util.editedFilter(event, root.query))
       return true
     }
     var text = String(event.text || "")
     if (!ctrl && text.length === 1 && text.charCodeAt(0) >= 32 && text.charCodeAt(0) !== 127) {
-      if (root.query.length < 200) root.query = root.query + text
-      root.resetCursor()
+      if (root.query.length < 200) root.editQuery(root.query + text)
       return true
     }
     return false
   }
 
   onCursorChanged: if (list.count > 0) list.positionViewAtIndex(root.cursor, ListView.Contain)
+  onLeftCursorChanged: {
+    root._leftKey = root.leftKeyOf(root.leftRows[root.leftCursor])
+    if (tree.count > 0) tree.positionViewAtIndex(root.leftCursor, ListView.Contain)
+  }
   onQueryPathChanged: if (root.active && root.queryPath !== "") cwdReload.restart()
+  onLeftRowsChanged: {
+    if (root._leftKey !== "" && root.leftKeyOf(root.leftRows[root.leftCursor]) !== root._leftKey) {
+      for (var k = 0; k < root.leftRows.length; k++) {
+        if (root.leftKeyOf(root.leftRows[k]) === root._leftKey) {
+          root.leftCursor = k
+          break
+        }
+      }
+    }
+    root.applyReveal()
+    if (!root.leftTakesCursor(root.leftRows[root.leftCursor])) {
+      var i = Math.min(root.leftCursor, root.leftRows.length - 1)
+      while (i > 0 && !root.leftTakesCursor(root.leftRows[i])) i--
+      root.leftCursor = Math.max(0, i)
+    }
+  }
 
   Timer {
     id: cwdReload
@@ -300,10 +783,19 @@ Item {
     repeat: false
     onTriggered: root.reloadForPath()
   }
+
+  // The folder's own list, once the cursor rests on it.
+  Timer {
+    id: folderRead
+    interval: 250
+    repeat: false
+    onTriggered: if (root.active && root.queryPath === "") root.readFolder(root.placePath)
+  }
+
   onRowsChanged: {
     if (root.cursor > root.rowCount - 1) root.cursor = root.rowCount - 1
     // The first answer lands after the sheet opened: start on the newest session.
-    if (root.active && root.cursor === 0 && root.query === "" && root.rows.length > 0) root.cursor = 1
+    if (root.active && !root._cursorTouched && root.cursor === 0 && root.query === "" && root.rows.length > 0) root.cursor = 1
   }
 
   // Opaque, so the view underneath never shows through; no entrance animation
@@ -330,7 +822,7 @@ Item {
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: "Pick a session"
+      text: "Where to run"
       color: root.theme.strong
       font.family: root.theme.fontFamily
       font.pixelSize: root.theme.type.title
@@ -358,224 +850,573 @@ Item {
     anchors.topMargin: Style.spacing.lg
     theme: root.theme
     text: root.query
-    placeholder: "Type to filter, or type a folder path for a new session"
+    placeholder: "Type to filter, or type a folder path such as ~/code/api"
     active: root.active
     trailing: root.loading ? "Reading sessions…"
       : (root.query !== "" || root.filter !== "all"
         ? root.rows.length + " of " + root.countFor(root.filter)
-        : root.countFor("all") + " sessions")
+        : root.countFor("all") + (root.countFor("all") === 1 ? " session" : " sessions"))
   }
 
-  Flow {
-    id: filterRow
+  // ---------------------------------------------------------------- places and folders
+
+  Item {
+    id: leftPane
     anchors.left: parent.left
-    anchors.right: parent.right
     anchors.top: search.bottom
     anchors.topMargin: Style.spacing.lg
-    spacing: Style.space(6)
+    anchors.bottom: footerColumn.top
+    anchors.bottomMargin: Style.spacing.lg
+    width: Math.round(root.width * 0.35)
 
-    Repeater {
-      model: root.filters
+    ListView {
+      id: tree
+      anchors.fill: parent
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: root.leftRows.length
 
-      delegate: Chip {
-        id: filterChip
-        required property string modelData
-        theme: root.theme
-        pill: true
-        harness: filterChip.modelData === "all" ? "" : filterChip.modelData
-        text: filterChip.modelData === "all" ? "All" : Model.harnessName(filterChip.modelData)
-        note: root.result === null ? "" : String(root.countFor(filterChip.modelData))
-        selected: root.filter === filterChip.modelData
-        hasCursor: root.filter === filterChip.modelData
-        onClicked: {
-          root.filter = filterChip.modelData
-          root.resetCursor()
+      delegate: Item {
+        id: lrow
+        required property int index
+        readonly property var info: root.leftRows[lrow.index] || ({ kind: "note", text: "", depth: 0 })
+        readonly property bool takes: root.leftTakesCursor(lrow.info)
+        readonly property bool cursorHere: root.focusPane === "places" && root.leftCursor === lrow.index
+        readonly property bool isPlace: lrow.index === root.placeRowIndex
+        readonly property real indent: Style.space(14) * (lrow.info.kind === "dir" ? lrow.info.depth : 0)
+        readonly property var marks: lrow.info.kind === "place" && lrow.info.id === "workspace"
+          ? root.marksFor(root.workspacePath)
+          : (lrow.info.kind === "dir" || lrow.info.kind === "recent" ? root.marksFor(lrow.info.path) : [])
+        width: tree.width
+        height: lrow.info.kind === "head" ? Style.space(26) : Style.space(30)
+
+        CursorSurface {
+          anchors.fill: parent
+          visible: lrow.takes
+          hasCursor: lrow.cursorHere
+          current: lrow.isPlace
+          foreground: root.theme.fg
+          accent: root.theme.accent
+        }
+
+        // Group label, in the section label voice of Compose.
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(6)
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(5)
+          visible: lrow.info.kind === "head"
+          textFormat: Text.PlainText
+          text: lrow.info.kind === "head" ? lrow.info.text : ""
+          color: root.focusPane === "places" ? root.theme.accentInk : root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.label
+          font.bold: true
+          font.letterSpacing: root.theme.type.tracking
+        }
+
+        Text {
+          id: chevron
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(4) + lrow.indent
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(14)
+          visible: lrow.info.kind === "dir"
+          textFormat: Text.PlainText
+          text: lrow.info.kind !== "dir" || lrow.info.outside === true ? "" : (lrow.info.expanded ? root.glyph.down : root.glyph.right)
+          color: root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.glyph
+        }
+
+        Text {
+          id: icon
+          anchors.left: parent.left
+          anchors.leftMargin: lrow.info.kind === "dir" ? chevron.anchors.leftMargin + Style.space(15) : Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: lrow.info.kind !== "head" && lrow.info.kind !== "note"
+          textFormat: Text.PlainText
+          text: {
+            var r = lrow.info
+            if (r.kind === "place") return r.id === "recent" ? root.glyph.recent : root.glyph.workspace
+            if (r.kind === "dir" && r.depth === 0 && r.path === root.home) return root.glyph.home
+            if (r.kind === "dir" && r.link) return root.glyph.link
+            return r.kind === "dir" && r.expanded ? root.glyph.folderOpen : root.glyph.folder
+          }
+          color: lrow.isPlace || lrow.cursorHere ? root.theme.accentInk : root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.glyph
+        }
+
+        // A note under an open folder: reading, empty, unreadable.
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(37) + Style.space(14) * Math.max(0, lrow.info.depth - 1)
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: lrow.info.kind === "note"
+          textFormat: Text.PlainText
+          text: lrow.info.kind === "note" ? lrow.info.text : ""
+          color: lrow.info.warn === true ? root.theme.warnInk : root.theme.soft
+          elide: Text.ElideRight
+          maximumLineCount: 1
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.meta
+        }
+
+        Item {
+          id: label
+          anchors.left: icon.right
+          anchors.leftMargin: Style.space(8)
+          anchors.right: markRow.left
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          height: nameText.implicitHeight
+          visible: lrow.info.kind !== "head" && lrow.info.kind !== "note"
+          readonly property string caption: {
+            var r = lrow.info
+            if (r.kind === "place" && r.id === "workspace") return Model.shortPath(root.workspacePath, root.home)
+            if (r.kind === "recent") {
+              var slash = r.path.lastIndexOf("/")
+              return Model.shortPath(slash > 0 ? r.path.slice(0, slash) : "/", root.home)
+            }
+            if (r.kind === "dir" && r.outside === true) return "outside your home folder"
+            if (r.kind === "dir" && r.own === false) return "another user's"
+            return ""
+          }
+
+          Text {
+            id: nameText
+            width: Math.max(0, Math.min(implicitWidth, label.width - (gitMark.visible ? gitMark.width + Style.space(6) : 0)
+              - (captionText.visible ? Math.min(captionText.implicitWidth, Style.space(90)) + Style.space(8) : 0)))
+            textFormat: Text.PlainText
+            text: {
+              var r = lrow.info
+              if (r.kind === "place") return r.id === "recent" ? "All recent sessions" : "No project"
+              return typeof r.name === "string" ? r.name : ""
+            }
+            color: lrow.info.outside === true || lrow.info.own === false ? root.theme.soft
+              : (lrow.cursorHere ? root.theme.fg : (lrow.info.hidden === true ? root.theme.readable : root.theme.strong))
+            elide: Text.ElideRight
+            maximumLineCount: 1
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.body
+            font.bold: lrow.info.kind === "place"
+          }
+
+          Text {
+            id: gitMark
+            x: nameText.width + Style.space(6)
+            anchors.verticalCenter: nameText.verticalCenter
+            visible: lrow.info.git === true
+            textFormat: Text.PlainText
+            text: root.glyph.git
+            color: root.theme.soft
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.glyph
+          }
+
+          Text {
+            id: captionText
+            x: nameText.width + (gitMark.visible ? gitMark.width + Style.space(12) : Style.space(8))
+            anchors.baseline: nameText.baseline
+            width: Math.max(0, label.width - x)
+            visible: label.caption !== ""
+            textFormat: Text.PlainText
+            text: label.caption
+            color: root.theme.soft
+            elide: Text.ElideMiddle
+            maximumLineCount: 1
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+          }
+        }
+
+        // Where each agent has worked: its mark and how many sessions, in this folder.
+        Row {
+          id: markRow
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(7)
+          visible: lrow.info.kind !== "head" && lrow.info.kind !== "note"
+
+          Repeater {
+            model: lrow.marks.length > 3 ? lrow.marks.slice(0, 3) : lrow.marks
+
+            delegate: Row {
+              id: markCell
+              required property var modelData
+              spacing: Style.space(3)
+
+              AgentMark {
+                anchors.verticalCenter: parent.verticalCenter
+                theme: root.theme
+                agent: markCell.modelData.harness
+                size: Style.space(11)
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: String(markCell.modelData.n)
+                color: root.theme.readable
+                font.family: root.theme.fontFamily
+                font.pixelSize: root.theme.type.meta
+                font.features: root.theme.type.digits
+              }
+            }
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: lrow.marks.length > 3 || (lrow.info.kind === "place" && lrow.info.id === "recent")
+              || (lrow.marks.length === 0 && lrow.info.kind === "dir" && lrow.info.depth > 0 && root.countBelow(lrow.info.path) > 0)
+            textFormat: Text.PlainText
+            text: {
+              if (lrow.info.kind === "place") return String(root.allRows.length)
+              if (lrow.marks.length > 3) return "+" + (lrow.marks.length - 3)
+              return root.countBelow(lrow.info.path) + " inside"
+            }
+            color: root.theme.soft
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+            font.features: root.theme.type.digits
+          }
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          visible: lrow.takes
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onEntered: {
+            root.focusPane = "places"
+            root.leftCursor = lrow.index
+          }
+          onClicked: function (mouse) {
+            root.focusPane = "places"
+            var r = lrow.info
+            var onChevron = r.kind === "dir" && mouse.x < chevron.x + chevron.width + Style.space(2)
+            if (onChevron) {
+              root.leftCursor = lrow.index
+              root.setExpanded(r.path, !r.expanded)
+              return
+            }
+            root.selectLeft(lrow.index)
+            if (r.kind === "dir" && !r.expanded) root.setExpanded(r.path, true)
+          }
         }
       }
     }
   }
 
-  ListView {
-    id: list
-    anchors.left: parent.left
+  // The hairline between the panes.
+  Rectangle {
+    id: divider
+    anchors.left: leftPane.right
+    anchors.leftMargin: Style.space(12)
+    anchors.top: leftPane.top
+    anchors.bottom: leftPane.bottom
+    width: Math.max(1, Style.space(1))
+    color: root.theme.faint
+  }
+
+  // ---------------------------------------------------------------- sessions of the place
+
+  Item {
+    id: rightPane
+    anchors.left: divider.right
+    anchors.leftMargin: Style.space(12)
     anchors.right: parent.right
-    anchors.top: filterRow.bottom
-    anchors.topMargin: Style.spacing.lg
-    // Whole rows only, so the last one is never cut through.
-    height: Math.floor(Math.max(0, footerColumn.y - Style.spacing.lg - list.y) / Style.space(34)) * Style.space(34)
-    clip: true
-    boundsBehavior: Flickable.StopAtBounds
-    model: root.rowCount
+    anchors.top: leftPane.top
+    anchors.bottom: leftPane.bottom
 
-    delegate: Item {
-      id: row
-      required property int index
-      readonly property var session: row.index > 0 ? root.rows[row.index - 1] : null
-      readonly property bool cursorHere: root.cursor === row.index
-      width: list.width
-      height: Style.space(34)
+    Item {
+      id: placeHead
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      height: Style.space(40)
 
-      CursorSurface {
-        anchors.fill: parent
-        hasCursor: row.cursorHere
-        foreground: root.theme.fg
-        accent: root.theme.accent
-      }
-
-      HarnessRail {
+      Text {
+        id: placeTitleText
         anchors.left: parent.left
-        anchors.leftMargin: Style.space(2)
         anchors.top: parent.top
-        anchors.topMargin: Style.space(5)
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: Style.space(5)
-        visible: row.session !== null
-        theme: root.theme
-        harness: row.session ? row.session.harness : ""
-      }
-
-      AgentMark {
-        id: rowMark
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(14)
-        anchors.verticalCenter: parent.verticalCenter
-        visible: row.session !== null
-        theme: root.theme
-        agent: row.session ? row.session.harness : ""
-        size: Style.space(14)
-      }
-
-      Text {
-        id: rowTitle
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(38)
-        anchors.verticalCenter: parent.verticalCenter
-        width: row.session ? parent.width * 0.40 : parent.width - Style.space(160)
+        width: Math.min(implicitWidth, parent.width - placePathText.implicitWidth - Style.space(10))
         textFormat: Text.PlainText
-        text: row.session
-          ? (row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13))
-          : (root.queryPath === "" && (root.newCwd === "" || root.newCwd === root.home)
-            ? "+ New session: type a folder path"
-            : "+ New session in " + Model.shortPath(root.newCwd, root.home)
-              + (root.filter === "all" ? " (" + Model.harnessName(root.newHarness) + ")" : ""))
-        color: row.cursorHere ? root.theme.fg : (row.session ? root.theme.strong : root.theme.readable)
-        elide: Text.ElideRight
-        maximumLineCount: 1
-        font.family: root.theme.fontFamily
-        font.pixelSize: root.theme.type.body
-      }
-
-      Text {
-        anchors.left: rowTitle.right
-        anchors.leftMargin: Style.space(12)
-        anchors.verticalCenter: parent.verticalCenter
-        width: parent.width * 0.26
-        visible: row.session !== null
-        textFormat: Text.PlainText
-        text: row.session ? Model.shortPath(row.session.cwd, root.home) : ""
-        color: root.theme.readable
-        elide: Text.ElideMiddle
-        maximumLineCount: 1
-        font.family: root.theme.fontFamily
-        font.pixelSize: root.theme.type.data
-      }
-
-      Row {
-        anchors.right: parent.right
-        anchors.rightMargin: Style.space(12)
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(14)
-
-        Text {
-          width: Style.space(70)
-          horizontalAlignment: Text.AlignRight
-          visible: row.session !== null
-          textFormat: Text.PlainText
-          text: row.session ? root.ago(row.session.updatedAtMs) : ""
-          color: root.theme.soft
-          font.family: root.theme.fontFamily
-          font.pixelSize: root.theme.type.meta
-          font.features: root.theme.type.digits
-        }
-
-        Text {
-          width: Style.space(64)
-          horizontalAlignment: Text.AlignRight
-          visible: row.session !== null
-          textFormat: Text.PlainText
-          text: row.session && typeof row.session.messages === "number" ? row.session.messages + " msgs" : ""
-          color: root.theme.soft
-          font.family: root.theme.fontFamily
-          font.pixelSize: root.theme.type.meta
-          font.features: root.theme.type.digits
-        }
-
-        Text {
-          width: Style.space(52)
-          horizontalAlignment: Text.AlignRight
-          textFormat: Text.PlainText
-          text: row.session ? "resume" : "new"
-          color: row.cursorHere ? root.theme.accentInk : root.theme.soft
-          font.family: root.theme.fontFamily
-          font.pixelSize: root.theme.type.meta
-        }
-      }
-
-      MouseArea {
-        anchors.fill: parent
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onEntered: root.cursor = row.index
-        onClicked: {
-          root.cursor = row.index
-          root.pickCursor()
-        }
-      }
-    }
-
-    Text {
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(38)
-      y: Style.space(34) + Style.space(12)
-      width: parent.width - Style.space(50)
-      visible: root.rows.length === 0 && !root.noMatch
-      textFormat: Text.PlainText
-      text: root.loading ? "Reading sessions…"
-        : (root.result === null ? "Sessions could not be read." : "No sessions to resume here. Start a new one above.")
-      color: root.loading ? root.theme.soft : root.theme.readable
-      elide: Text.ElideRight
-      maximumLineCount: 1
-      font.family: root.theme.fontFamily
-      font.pixelSize: root.theme.type.body
-    }
-
-    // The fact, then the way back, in two inks.
-    Row {
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(38)
-      y: Style.space(34) + Style.space(12)
-      width: parent.width - Style.space(50)
-      visible: root.rows.length === 0 && root.noMatch
-      spacing: Style.space(7)
-
-      Text {
-        width: Math.max(0, Math.min(implicitWidth, parent.width - recoverText.implicitWidth - parent.spacing))
-        textFormat: Text.PlainText
-        text: "No sessions match \"" + root.query + "\"."
+        text: root.placeTitle
         color: root.theme.strong
         elide: Text.ElideRight
         maximumLineCount: 1
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.type.body
+        font.bold: true
       }
 
       Text {
-        id: recoverText
+        id: placePathText
+        x: placeTitleText.width + Style.space(10)
+        anchors.baseline: placeTitleText.baseline
+        width: Math.max(0, Math.min(implicitWidth, parent.width - x))
+        visible: root.activePath !== "" && root.activeKind !== "home"
         textFormat: Text.PlainText
-        text: "Esc clears the filter."
+        text: Model.shortPath(root.activePath, root.home)
         color: root.theme.soft
+        elide: Text.ElideMiddle
+        maximumLineCount: 1
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.meta
+      }
+
+      Text {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        textFormat: Text.PlainText
+        text: root.placeFact
+        color: root.activeKind === "home" ? root.theme.warnInk : root.theme.readable
+        elide: Text.ElideRight
+        maximumLineCount: 1
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.meta
+      }
+    }
+
+    Flow {
+      id: filterRow
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: placeHead.bottom
+      anchors.topMargin: Style.spacing.lg
+      spacing: Style.space(6)
+
+      Repeater {
+        model: root.filters
+
+        delegate: Chip {
+          id: filterChip
+          required property string modelData
+          theme: root.theme
+          pill: true
+          harness: filterChip.modelData === "all" ? "" : filterChip.modelData
+          text: filterChip.modelData === "all" ? "All" : Model.harnessShortName(filterChip.modelData)
+          note: root.allResult === null ? "" : String(root.countFor(filterChip.modelData))
+          selected: root.filter === filterChip.modelData
+          hasCursor: root.filter === filterChip.modelData
+          onClicked: {
+            root.filter = filterChip.modelData
+            root._cursorTouched = false
+            root.resetCursor()
+          }
+        }
+      }
+    }
+
+    ListView {
+      id: list
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: filterRow.bottom
+      anchors.topMargin: Style.spacing.lg
+      // Whole rows only, so the last one is never cut through.
+      height: Math.floor(Math.max(0, rightPane.height - list.y) / Style.space(34)) * Style.space(34)
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: root.rowCount
+
+      delegate: Item {
+        id: row
+        required property int index
+        readonly property var session: row.index > 0 ? root.rows[row.index - 1] : null
+        readonly property bool cursorHere: root.focusPane === "list" && root.cursor === row.index
+        readonly property bool chosen: row.session !== null && root.initialSessionId !== "" && row.session.id === root.initialSessionId
+        readonly property bool showFolder: row.session !== null && root.activeKind === "recent"
+        width: list.width
+        height: Style.space(34)
+
+        CursorSurface {
+          anchors.fill: parent
+          hasCursor: row.cursorHere
+          foreground: root.theme.fg
+          accent: root.theme.accent
+        }
+
+        HarnessRail {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(2)
+          anchors.top: parent.top
+          anchors.topMargin: Style.space(5)
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(5)
+          visible: row.session !== null
+          theme: root.theme
+          harness: row.session ? row.session.harness : ""
+        }
+
+        AgentMark {
+          id: rowMark
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(14)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: row.session !== null
+          theme: root.theme
+          agent: row.session ? row.session.harness : ""
+          size: Style.space(14)
+        }
+
+        Text {
+          id: rowTitle
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(38)
+          anchors.verticalCenter: parent.verticalCenter
+          width: row.session
+            ? (row.showFolder ? parent.width * 0.40 : parent.width - Style.space(38) - metaRow.width - Style.space(16))
+            : parent.width - Style.space(160)
+          textFormat: Text.PlainText
+          text: {
+            if (row.session) return row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13)
+            if (root.activeKind === "home") return "+ New session: pick a folder inside ~, or No project"
+            if (root.activeKind === "recent" && (root.newCwd === "" || root.newCwd === root.home))
+              return "+ New session: type a folder path"
+            return "+ New session in " + Model.shortPath(root.newCwd, root.home)
+              + (root.filter === "all" ? " (" + Model.harnessName(root.newHarness) + ")" : "")
+          }
+          color: row.cursorHere ? root.theme.fg
+            : (row.session ? root.theme.strong : (root.activeKind === "home" ? root.theme.soft : root.theme.readable))
+          elide: Text.ElideRight
+          maximumLineCount: 1
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.body
+        }
+
+        Text {
+          anchors.left: rowTitle.right
+          anchors.leftMargin: Style.space(12)
+          anchors.right: metaRow.left
+          anchors.rightMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: row.showFolder
+          textFormat: Text.PlainText
+          text: row.session ? Model.shortPath(row.session.cwd, root.home) : ""
+          color: root.theme.readable
+          elide: Text.ElideMiddle
+          maximumLineCount: 1
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.data
+        }
+
+        Row {
+          id: metaRow
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(14)
+
+          Text {
+            width: Style.space(70)
+            horizontalAlignment: Text.AlignRight
+            visible: row.session !== null
+            textFormat: Text.PlainText
+            text: row.session ? root.ago(row.session.updatedAtMs) : ""
+            color: root.theme.soft
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+            font.features: root.theme.type.digits
+          }
+
+          Text {
+            width: Style.space(64)
+            horizontalAlignment: Text.AlignRight
+            visible: row.session !== null
+            textFormat: Text.PlainText
+            text: row.session && typeof row.session.messages === "number" ? row.session.messages + " msgs" : ""
+            color: root.theme.soft
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+            font.features: root.theme.type.digits
+          }
+
+          Text {
+            width: Style.space(52)
+            horizontalAlignment: Text.AlignRight
+            textFormat: Text.PlainText
+            text: row.chosen ? root.glyph.check + " now" : (row.session ? "resume" : "new")
+            color: row.chosen ? root.theme.okInk : (row.cursorHere ? root.theme.accentInk : root.theme.soft)
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+          }
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onEntered: {
+            root.focusPane = "list"
+            root._cursorTouched = true
+            root.cursor = row.index
+          }
+          onClicked: {
+            root.focusPane = "list"
+            root.cursor = row.index
+            root.pickCursor()
+          }
+        }
+      }
+
+      Text {
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(38)
+        y: Style.space(34) + Style.space(12)
+        width: parent.width - Style.space(50)
+        visible: root.rows.length === 0 && !root.noMatch
+        textFormat: Text.PlainText
+        text: {
+          if (root.loading) return "Reading sessions…"
+          if (root.activeKind === "home") return "Sessions started in ~ itself cannot be resumed here."
+          if (root.activeKind !== "recent" && root.folderLoading) return "Reading the sessions of " + Model.shortPath(root.activePath, root.home) + "…"
+          if (root.result === null) return "Sessions could not be read."
+          if (root.activeKind === "recent") return "No sessions to resume here. Start a new one above."
+          return "No sessions here in the last " + (typeof root.result.limitDays === "number" ? root.result.limitDays : 90)
+            + " days. Enter starts a new one."
+        }
+        color: root.loading || root.folderLoading ? root.theme.soft : root.theme.readable
+        elide: Text.ElideRight
+        maximumLineCount: 1
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.type.body
+      }
+
+      // The fact, then the way back, in two inks.
+      Row {
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(38)
+        y: Style.space(34) + Style.space(12)
+        width: parent.width - Style.space(50)
+        visible: root.rows.length === 0 && root.noMatch
+        spacing: Style.space(7)
+
+        Text {
+          width: Math.max(0, Math.min(implicitWidth, parent.width - recoverText.implicitWidth - parent.spacing))
+          textFormat: Text.PlainText
+          text: "No sessions match \"" + root.query + "\"."
+          color: root.theme.strong
+          elide: Text.ElideRight
+          maximumLineCount: 1
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.body
+        }
+
+        Text {
+          id: recoverText
+          textFormat: Text.PlainText
+          text: "Esc clears the filter."
+          color: root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.body
+        }
       }
     }
   }

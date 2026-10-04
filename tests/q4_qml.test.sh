@@ -51,6 +51,7 @@ expected = {
     "settings-get": (7000, 16384, False, R), "settings-set": (9000, 16384, True, W), "copy-resume": (8000, 16384, False, W),
     "sessions": (13000, 921600, False, R), "usage": (8000, 131072, False, R), "agents": (35000, 65536, False, R),
     "models": (30000, 262144, False, R), "timeline": (9000, 262144, False, R),
+    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W),
 }
 bad = sorted(set(rows) ^ set(expected)) + sorted(k for k in rows if k in expected and rows[k] != expected[k])
 if bad:
@@ -1597,6 +1598,7 @@ import "lib/Recorder.js" as Recorder
 Harness {
   id: root
   Service { id: svc }
+  property var workspaceAnswer: null
   readonly property double today: Model.localMidnight(Date.now())
   property int step: 0
   function dayAt(n) { var d = new Date(root.today); d.setDate(d.getDate() + n); return d.getTime() }
@@ -1639,6 +1641,26 @@ Harness {
           svc.loadSessions("gemini", "relative/dir")
           root.eq(root.last("sessions").args, ["--harness", "gemini"])
 
+          // The picker's folder reads: one folder's sessions, one folder's subfolders, No project.
+          Recorder.answers["sessions"] = function (args) {
+            return args[0] === "--in" ? { ok: true, harness: null, sessions: [], counts: {}, "in": args[1], cwd: args[1] } : { ok: false, code: "stub", message: "Stub answer." }
+          }
+          svc.loadFolderSessions("/home/u/proj")
+          root.eq(root.last("sessions").args, ["--in", "/home/u/proj"])
+          var folderReads = Recorder.of("sessions").length
+          svc.loadFolderSessions("relative/dir")
+          root.eq(Recorder.of("sessions").length, folderReads, "a relative folder is never asked for")
+          Recorder.answers["dirs"] = function (args) {
+            return { ok: true, path: args[1] === "/home/u/link" ? "/home/u/real" : args[1], home: "/home/u", state: "ok",
+                     entries: [ { name: "api", hidden: false, git: true, own: true, link: false, target: null } ], truncated: false }
+          }
+          svc.loadDirs("/home/u")
+          root.eq([root.last("dirs").args, root.last("dirs").deadlineMs, root.last("dirs").cap], [["--path", "/home/u"], 8000, 262144 + 1024])
+          svc.loadDirs("/home/u/link")
+          var dirReads = Recorder.of("dirs").length
+          svc.loadDirs("relative")
+          root.eq(Recorder.of("dirs").length, dirReads)
+
           Recorder.answers["models"] = function (args) { return { ok: true, harness: args[1], models: [ { id: "opencode/big-pickle", label: "Big Pickle" } ], reason: null } }
           svc.loadModels("opencode", true)
           root.eq(root.last("models").args, ["--harness", "opencode", "--refresh"])
@@ -1667,7 +1689,16 @@ Harness {
           svc.setLimitsShown(["claude", "claude"], function (res) {})
           root.eq(Recorder.of("settings-set").length, sets)
           svc.setLimitsShown("auto", null)
+          // No project is made through the write lane, after the settings writes above.
+          Recorder.answers["workspace"] = function (args) { return { ok: true, path: "/home/u/AutoPilot", exists: args.length === 1, created: args.length === 1 } }
+          svc.loadWorkspace(true, function (res) { root.workspaceAnswer = res })
         } else if (s === 3) {
+          root.eq(root.last("workspace").args, ["--create"])
+          root.eq([svc.sessions["in"]["in"], svc.dirs["/home/u"].entries[0].name, svc.dirs["/home/u/link"].path, svc.dirs["/home/u/real"].path],
+                  ["/home/u/proj", "api", "/home/u/real", "/home/u/real"])
+          root.eq([svc.workspace, root.workspaceAnswer && root.workspaceAnswer.created], [{ path: "/home/u/AutoPilot", exists: true }, true])
+          svc.clearDirs()
+          root.eq(svc.dirs, {})
           root.eq(JSON.parse(root.last("settings-set").stdin), { limitsShown: "auto" })
           root.eq(svc.models.opencode.models[0].label, "Big Pickle")
           root.eq([svc.models.cursor.ok, svc.models.cursor.reason], [true, null])
@@ -1686,6 +1717,6 @@ Harness {
   }
 }
 QML
-run_case "$S" Payload.qml "service_payload_v2_fields: allowPaid, provider and sessionPath reach the helper, sessions --cwd, models, timeline days"
+run_case "$S" Payload.qml "service_payload_v2_fields: allowPaid, provider and sessionPath reach the helper, sessions --cwd and --in, dirs, workspace, models, timeline days"
 
 finish

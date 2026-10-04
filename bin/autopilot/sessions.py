@@ -14,7 +14,10 @@ allocated and nothing is followed that the user did not put there as a plain fil
   - Pi sessions are listed only from the one folder Pi derives from a working folder, and a
     Pi lookup accepts only an absolute path inside ~/.pi/agent/sessions whose header matches;
   - Cursor chats are listed only when an Auto Pilot run record created them, and their store
-    is never opened: the chat folder and its store.db-wal are looked at with lstat only.
+    is never opened: the chat folder and its store.db-wal are looked at with lstat only;
+  - a listing for one folder (`only`) keeps the same bounds and answers only the sessions recorded
+    in that folder: SQLite stores filter in the query, Claude reads the one project folder named
+    after it when there is one, and every other row is matched on its recorded folder.
 
 Nothing read here is ever written anywhere; titles and folders go out in the helper
 answer only, stripped of control characters and capped.
@@ -379,9 +382,32 @@ def _claude_meta(records):
     return cwd, _title((custom, ai_title, user_text), cwd)
 
 
-def _claude_list(budget, cap, cutoff_s):
+def _claude_dir_name(cwd):
+    """The project folder name Claude Code keeps a working folder's transcripts under."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def _claude_named_dirs(only):
+    """The real project folders named after the folders in only (a link is never one)."""
+    found = []
+    for name in sorted({_claude_dir_name(path) for path in only}):
+        path = _home_path(".claude", "projects", name)
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            found.append(path)
+    return found
+
+
+def _claude_list(budget, cap, cutoff_s, only=None):
     counter = [0]
-    project_dirs, truncated = _claude_project_dirs(budget, counter)
+    named = _claude_named_dirs(only) if only is not None else []
+    if named:
+        project_dirs, truncated = named, False
+    else:
+        project_dirs, truncated = _claude_project_dirs(budget, counter)
     candidates = []
     for directory in project_dirs:
         if truncated:
@@ -412,7 +438,7 @@ def _claude_list(budget, cap, cutoff_s):
             if records is None or info.st_mtime < cutoff_s:
                 continue
             meta = _claude_meta(records)
-            if meta is None:
+            if meta is None or (only is not None and meta[0] not in only):
                 continue
             seen.add(session_id)
             if len(rows) >= cap:
@@ -580,7 +606,15 @@ def _opencode_rows(rows, cutoff_ms):
     return out
 
 
-def _opencode_list(budget, cap, cutoff_ms):
+def _in_clause(column, only):
+    """(" AND <column> IN (?, ...)", params) for a one-folder listing, ("", ()) otherwise."""
+    if only is None:
+        return "", ()
+    folders = sorted(only)
+    return " AND %s IN (%s)" % (column, ", ".join("?" for _ in folders)), tuple(folders)
+
+
+def _opencode_list(budget, cap, cutoff_ms, only=None):
     connection, error = _open_store(_opencode_path(), budget)
     if connection is None:
         return [], error == ERROR_TIMEOUT, error
@@ -589,9 +623,10 @@ def _opencode_list(budget, cap, cutoff_ms):
         if not _OPENCODE_REQUIRED <= columns:
             return [], False, ERROR_UNREADABLE
         archived = " AND time_archived IS NULL" if "time_archived" in columns else ""
-        sql = (_opencode_select(columns) + "WHERE parent_id IS NULL" + archived
+        folder, params = _in_clause("directory", only)
+        sql = (_opencode_select(columns) + "WHERE parent_id IS NULL" + archived + folder
                + " AND time_updated >= ? ORDER BY time_updated DESC LIMIT ?")
-        rows = connection.execute(sql, (cutoff_ms, cap + 1)).fetchmany(cap + 1)
+        rows = connection.execute(sql, params + (cutoff_ms, cap + 1)).fetchmany(cap + 1)
     except sqlite3.Error as err:
         error = _sql_error(err)
         return [], error == ERROR_TIMEOUT, error
@@ -742,7 +777,7 @@ def _rollout_meta(path, session_id, budget):
     return cwd, _title((title,), cwd), info
 
 
-def _codex_rollout_list(budget, cap, cutoff_s):
+def _codex_rollout_list(budget, cap, cutoff_s, only=None):
     files, truncated = _rollout_files(budget)
     files.sort(reverse=True)
     rows, seen = [], set()
@@ -751,7 +786,7 @@ def _codex_rollout_list(budget, cap, cutoff_s):
             if mtime_ns / 1e9 < cutoff_s or session_id in seen:
                 continue
             meta = _rollout_meta(path, session_id, budget)
-            if meta is None:
+            if meta is None or (only is not None and meta[0] not in only):
                 continue
             seen.add(session_id)
             if len(rows) >= cap:
@@ -764,16 +799,17 @@ def _codex_rollout_list(budget, cap, cutoff_s):
     return rows, truncated
 
 
-def _codex_list(budget, cap, cutoff_ms):
+def _codex_list(budget, cap, cutoff_ms, only=None):
     """Threads from state_5.sqlite; rollout files when the index is absent, unreadable or empty."""
     connection, shape, error = _codex_store(budget)
     if connection is not None:
         columns, edges = shape
         select, updated, where = _codex_select(columns, edges)
-        sql = (select + "WHERE " + " AND ".join(where + ["%s >= ?" % updated])
+        folder, params = _in_clause("cwd", only)
+        sql = (select + "WHERE " + " AND ".join(where + ["%s >= ?" % updated]) + folder
                + " ORDER BY %s DESC LIMIT ?" % updated)
         try:
-            fetched = connection.execute(sql, (cutoff_ms, cap + 1)).fetchmany(cap + 1)
+            fetched = connection.execute(sql, (cutoff_ms,) + params + (cap + 1,)).fetchmany(cap + 1)
         except sqlite3.Error as err:
             fetched, error = [], _sql_error(err)
         finally:
@@ -783,7 +819,7 @@ def _codex_list(budget, cap, cutoff_ms):
             return rows[:cap], len(fetched) > cap, None
     if error == ERROR_TIMEOUT:
         return [], True, error
-    rows, truncated = _codex_rollout_list(budget, cap, cutoff_ms // 1000)
+    rows, truncated = _codex_rollout_list(budget, cap, cutoff_ms // 1000, only)
     return rows, truncated, None if rows else error
 
 
@@ -941,7 +977,7 @@ def _gemini_chat(path, extension, id8, budget):
     return session_id, title, count, info
 
 
-def _gemini_list(budget, cap, cutoff_s):
+def _gemini_list(budget, cap, cutoff_s, only=None):
     counter = [0]
     rows, seen, candidates = [], set(), []
     truncated = False
@@ -950,6 +986,8 @@ def _gemini_list(budget, cap, cutoff_s):
         for root, chats in dirs:
             if truncated:
                 break
+            if only is not None and root not in only:
+                continue
             files, truncated = _gemini_chat_files(chats, budget, counter)
             candidates.extend((mtime_ns, path, id8, extension, root)
                               for mtime_ns, path, id8, extension in files
@@ -1230,12 +1268,12 @@ def _cursor_rows(records, labels, cutoff_ms, only_id=None):
     return rows
 
 
-def _cursor_list(budget, cap, cutoff_ms):
+def _cursor_list(budget, cap, cutoff_ms, only=None):
     try:
         records, labels = _cursor_candidates(budget, cutoff_ms // 1000 - consts.RUNTIME_MAX)
     except ApError:
         return [], False, ERROR_UNREADABLE
-    rows = _cursor_rows(records, labels, cutoff_ms)
+    rows = [row for row in _cursor_rows(records, labels, cutoff_ms) if only is None or row["cwd"] in only]
     return rows[:cap], len(rows) > cap, None
 
 
@@ -1247,18 +1285,26 @@ def _cursor_lookup(session_id, budget):
 
 # --- public API ------------------------------------------------------------------
 
-def list_sessions(harness, now, *, cwd=None):
+def list_sessions(harness, now, *, cwd=None, only=None):
     """Sessions (3.12) without "ok": newest first per harness, at most 50 each, 90 days back.
 
     harness None lists every harness. A harness whose store is absent lists nothing and reports
     no error; a store that is refused, too large or too slow reports it in errors. Pi lists
     only the sessions of cwd, so without cwd it lists nothing and is named in needsCwd.
+    `only` (a folder) answers just the sessions recorded in that folder, for every harness; it
+    is also Pi's folder, and the answer names it as "in".
     """
     scope = consts.HARNESSES if harness is None else (harness,)
     if any(name not in consts.HARNESSES for name in scope):
         raise ApError("invalid_harness")
     if cwd is not None and _valid_cwd(cwd) is None:
         raise ApError("invalid_cwd", field="cwd")
+    if only is not None and (cwd is not None or _valid_cwd(only) is None):
+        raise ApError("invalid_cwd", field="cwd")
+    folder = None
+    if only is not None:
+        cwd = only.rstrip("/") or "/"
+        folder = frozenset((cwd, os.path.realpath(cwd)))
     fsio.home()
     now = int(now)
     cap = consts.SESSIONS_PER_HARNESS
@@ -1274,15 +1320,15 @@ def list_sessions(harness, now, *, cwd=None):
         else:
             try:
                 if name == "claude":
-                    rows, cut = _claude_list(budget, cap, cutoff_s)
+                    rows, cut = _claude_list(budget, cap, cutoff_s, folder)
                 elif name == "opencode":
-                    rows, cut, error = _opencode_list(budget, cap, cutoff_ms)
+                    rows, cut, error = _opencode_list(budget, cap, cutoff_ms, folder)
                 elif name == "codex":
-                    rows, cut, error = _codex_list(budget, cap, cutoff_ms)
+                    rows, cut, error = _codex_list(budget, cap, cutoff_ms, folder)
                 elif name == "gemini":
-                    rows, cut = _gemini_list(budget, cap, cutoff_s)
+                    rows, cut = _gemini_list(budget, cap, cutoff_s, folder)
                 elif name == "cursor":
-                    rows, cut, error = _cursor_list(budget, cap, cutoff_ms)
+                    rows, cut, error = _cursor_list(budget, cap, cutoff_ms, folder)
                 elif name == "pi" and cwd is not None:
                     rows, cut = _pi_list(budget, cap, cutoff_s, cwd)
             except _Cut:
@@ -1301,7 +1347,8 @@ def list_sessions(harness, now, *, cwd=None):
     return {"harness": harness, "nowMs": now * 1000, "sessions": sessions, "counts": counts,
             "truncated": truncated, "errors": errors,
             "limitDays": consts.SESSIONS_MAX_AGE_DAYS, "perHarnessCap": cap,
-            "cwd": cwd, "needsCwd": ["pi"] if "pi" in scope and cwd is None else []}
+            "cwd": cwd, "in": cwd if folder is not None else None,
+            "needsCwd": ["pi"] if "pi" in scope and cwd is None else []}
 
 
 def lookup_session(harness, session_id, *, session_path=None):

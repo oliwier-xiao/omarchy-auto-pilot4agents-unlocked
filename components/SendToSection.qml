@@ -76,11 +76,8 @@ Item {
   // Chip labels only. They are short so six agents fit on one line at the card's width;
   // every other place, and the sign-in sheet itself, names the agent in full through
   // Model.harnessName.
-  readonly property var shortLabels: ({ claude: "Claude", gemini: "Gemini", cursor: "Cursor" })
-
   function chipLabel(id) {
-    var k = String(id || "")
-    return root.shortLabels.hasOwnProperty(k) ? root.shortLabels[k] : Model.harnessName(k)
+    return Model.harnessShortName(String(id || ""))
   }
 
   function stepHarness(dir) {
@@ -106,11 +103,15 @@ Item {
     return d === 1 ? "yesterday" : d + "d ago"
   }
 
+  // The draft runs in the No project folder.
+  readonly property bool noProject: root.cwd !== "" && root.cwd === Model.workspacePath(root.home)
+
   readonly property string title: {
     if (root.hasSession) {
       var t = typeof root.target.title === "string" && root.target.title !== "" ? root.target.title : ""
       return t !== "" ? t : Model.elideMiddle(root.target.sessionId, 13)
     }
+    if (root.noProject) return "No project"
     return root.cwd !== "" ? "New session" : "No session picked"
   }
 
@@ -118,8 +119,9 @@ Item {
     var msgs = root.target && typeof root.target.messages === "number" ? ", " + root.target.messages + " messages" : ""
     if (root.hasSession && root.mode === "resume") return "resume" + msgs
     if (root.hasSession && root.mode === "fork") return "fork: a copy continues, the original stays" + msgs
+    if (root.noProject) return "new session in " + Model.shortPath(root.cwd, root.home) + ", no project needed"
     if (root.cwd !== "") return "new session in " + Model.shortPath(root.cwd, root.home)
-    return "No session yet. Pick one, or a folder for a new session."
+    return "No session yet. Pick one, a folder for a new session, or No project."
   }
 
   function handleKey(event) {

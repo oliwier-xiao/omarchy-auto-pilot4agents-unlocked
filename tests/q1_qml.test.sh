@@ -728,6 +728,7 @@ expected = {
     "settings-get": (7000, 16384, False, R), "settings-set": (9000, 16384, True, W), "copy-resume": (8000, 16384, False, W),
     "sessions": (13000, 921600, False, R), "usage": (8000, 131072, False, R), "agents": (35000, 65536, False, R),
     "models": (30000, 262144, False, R), "timeline": (9000, 262144, False, R),
+    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W),
 }
 bad = sorted(set(rows) ^ set(expected)) + sorted(k for k in rows if k in expected and rows[k] != expected[k])
 if bad:
