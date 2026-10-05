@@ -6,17 +6,27 @@ Unlocked edition, with Auto and Full access levels. Write a prompt now and send 
 
 Each job runs headless in a transient systemd user timer, so it fires while the screen is locked and while the panel is closed. Auto Pilot shows the exact command before it arms anything, and afterwards it tells you what happened. Cursor Agent runs in Plan or Full access, and Pi in Plan, Auto or Full access (see [Cursor Agent and Pi](#cursor-agent-and-pi)).
 
-| Install | Update | Remove |
-|---|---|---|
-| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked`, after [cancelling jobs](#removal) |
+**Install**
+
+```
+omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable
+```
+
+**Update**
+
+```
+omarchy plugin update oliwier.auto-pilot4agents-unlocked
+```
+
+**Remove**
+
+Cancel its jobs first, see [Removal](#removal).
+
+```
+omarchy plugin remove oliwier.auto-pilot4agents-unlocked
+```
 
 ![Auto Pilot Unlocked panel on Compose](preview.png)
-
-| Install | Update | Remove |
-|---|---|---|
-| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents` | `omarchy plugin remove oliwier.auto-pilot4agents`, after [cancelling jobs](#removal) |
-
-![Auto Pilot panel on Compose](preview.png)
 
 ## What it does
 
