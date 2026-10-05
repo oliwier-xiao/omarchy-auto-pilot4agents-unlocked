@@ -95,6 +95,10 @@ Item {
   readonly property string workspacePath: root.service && root.service.workspace && typeof root.service.workspace.path === "string"
     ? root.service.workspace.path : Model.workspacePath(root.home)
   readonly property bool workspaceExists: !!root.service && !!root.service.workspace && root.service.workspace.exists === true
+  // Something else is at ~/AutoPilot (a file, a link, a folder others can write); it is never changed.
+  readonly property bool workspaceRefused: !!root.service && !!root.service.workspace && root.service.workspace.refused === true
+  readonly property string workspaceRefusal: Model.shortPath(root.workspacePath, root.home)
+    + " cannot be used: it has to be a folder of yours, not a link, that nobody else can write. Fix it, or pick another folder."
 
   // A typed folder path wins over the chosen place while it is typed.
   readonly property string activePath: root.queryPath !== "" ? root.queryPath : root.placePath
@@ -240,7 +244,7 @@ Item {
       return
     }
     var entries = Array.isArray(d.entries) ? d.entries : []
-    var shown = 0, hidden = 0
+    var shown = 0, hidden = d.hidden === true || typeof d.hiddenCount !== "number" ? 0 : d.hiddenCount
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i]
       if (!e || typeof e.name !== "string") continue
@@ -248,7 +252,7 @@ Item {
       shown++
       if (e.link === true && typeof e.target !== "string") {
         out.push({ kind: "dir", path: "", name: e.name, depth: depth + 1, expanded: false, git: false, link: true,
-                   own: true, hidden: e.hidden === true, outside: true })
+                   own: true, hidden: e.hidden === true, outside: e.outside !== false, closed: true })
         continue
       }
       var child = e.link === true ? e.target : (path === "/" ? "/" : path + "/") + e.name
@@ -257,8 +261,11 @@ Item {
     }
     if (shown === 0)
       out.push({ kind: "note", text: hidden > 0 ? "Only hidden folders. Ctrl+H shows them." : "No folders inside.", depth: depth + 1 })
+    if (typeof d.skipped === "number" && d.skipped > 0)
+      out.push({ kind: "note", text: d.skipped === 1 ? "1 folder with a name that cannot be shown is left out."
+                 : d.skipped + " folders with names that cannot be shown are left out.", depth: depth + 1 })
     if (d.truncated === true)
-      out.push({ kind: "note", text: "Only the first " + entries.length + " folders are listed.", depth: depth + 1 })
+      out.push({ kind: "note", text: "Not every folder here is listed. Type a path to reach one.", depth: depth + 1 })
   }
 
   function leftTakesCursor(row) {
@@ -307,6 +314,8 @@ Item {
 
   function selectLeft(index) {
     if (index < 0 || index >= root.leftRows.length || !root.leftTakesCursor(root.leftRows[index])) return
+    // A move by hand wins over a folder still waiting to be revealed.
+    root._reveal = ""
     root.leftCursor = index
     var p = root.placeOf(root.leftRows[index])
     if (p === null) return
@@ -338,10 +347,16 @@ Item {
     if (open) root.readDirs(path)
   }
 
+  // Hidden folders are asked for only while they are shown.
   function readDirs(path) {
     if (!root.service || typeof root.service.loadDirs !== "function") return
     var d = root.service.dirs ? root.service.dirs[path] : undefined
-    if (d === undefined || d.ok !== true) root.service.loadDirs(path)
+    if (d === undefined || d.ok !== true || (root.showHidden && d.hidden !== true)) root.service.loadDirs(path, root.showHidden)
+  }
+
+  function toggleHidden() {
+    root.showHidden = !root.showHidden
+    if (root.showHidden) for (var path in root.expanded) root.readDirs(path)
   }
 
   // Opens every folder from the home folder down to path's parent, and moves the left
@@ -349,6 +364,8 @@ Item {
   function reveal(path) {
     if (root.home === "" || path === "" || (path !== root.home && path.indexOf(root.home + "/") !== 0)) return
     var parts = path.slice(root.home.length).split("/").filter(function (s) { return s !== "" })
+    // A folder inside a hidden one is reached only with hidden folders shown.
+    if (!root.showHidden && parts.some(function (s) { return s.charAt(0) === "." })) root.showHidden = true
     var next = {}
     for (var k in root.expanded) next[k] = true
     var at = root.home
@@ -392,7 +409,7 @@ Item {
       return
     }
     if (dir > 0) {
-      if (r.outside === true || r.path === "") return
+      if (r.closed === true || r.path === "") return
       if (!r.expanded) root.setExpanded(r.path, true)
       else root.moveLeft(1)
       return
@@ -473,9 +490,11 @@ Item {
   readonly property string placeFact: {
     if (root.activeKind === "recent") return "Every folder, newest first."
     if (root.activeKind === "home") return "Agents do not start in your home folder itself. Pick a folder inside it, or No project."
-    if (root.activeKind === "workspace")
+    if (root.activeKind === "workspace") {
+      if (root.workspaceRefused) return root.workspaceRefusal
       return root.workspaceExists ? "For work without a project. Agents start here and keep their files here."
         : "For work without a project. Made when you start a session here; agents keep their files in it."
+    }
     var parts = []
     if (root.activeEntry && root.activeEntry.git === true) parts.push("git")
     if (root.activeEntry && root.activeEntry.own === false) parts.push("owned by another user, agents cannot start here")
@@ -567,6 +586,8 @@ Item {
     root.placeKind = start === "" ? "recent" : (start === root.workspacePath ? "workspace" : "folder")
     root.placePath = start
     root.leftCursor = root.leftIndexOfPlace(start !== "" && start === root.workspacePath ? "workspace" : "recent")
+    // Set here too: a cursor index equal to the last open's would keep the last open's row key.
+    root._leftKey = root.leftKeyOf(root.leftRows[root.leftCursor])
     if (start !== "" && start !== root.workspacePath) root.reveal(start)
     root.resetCursor()
     root._listedCwd = root.initialCwd !== "" ? root.initialCwd : root.home
@@ -667,12 +688,16 @@ Item {
       root.noticeRequested(root.blockedSentence(harness), "warn", null)
       return
     }
+    if (cwd === root.workspacePath && root.workspaceRefused) {
+      root.noticeRequested(root.workspaceRefusal, "warn", null)
+      return
+    }
     if (cwd === root.workspacePath && !root.workspaceExists && root.service && typeof root.service.loadWorkspace === "function") {
       root.service.loadWorkspace(true, function (res) {
         if (res && res.ok === true && typeof res.path === "string")
           root.picked({ harness: harness, mode: "new", sessionId: null, cwd: res.path, title: "No project", sessionPath: null })
         else
-          root.noticeRequested(Model.shortPath(cwd, root.home) + " could not be made. Make the folder yourself, or pick another.", "warn", null)
+          root.noticeRequested(root.workspaceRefusal, "warn", null)
       })
       return
     }
@@ -719,7 +744,7 @@ Item {
       return true
     }
     if (ctrl && key === Qt.Key_N) { root.pickNew(true); return true }
-    if (ctrl && key === Qt.Key_H) { root.showHidden = !root.showHidden; return true }
+    if (ctrl && key === Qt.Key_H) { root.toggleHidden(); return true }
     if (root.focusPane === "places") {
       if (key === Qt.Key_Return || key === Qt.Key_Enter) { root.focusPane = "list"; return true }
       if (key === Qt.Key_Right) { root.stepTree(1); return true }
@@ -923,7 +948,7 @@ Item {
           width: Style.space(14)
           visible: lrow.info.kind === "dir"
           textFormat: Text.PlainText
-          text: lrow.info.kind !== "dir" || lrow.info.outside === true ? "" : (lrow.info.expanded ? root.glyph.down : root.glyph.right)
+          text: lrow.info.kind !== "dir" || lrow.info.closed === true ? "" : (lrow.info.expanded ? root.glyph.down : root.glyph.right)
           color: root.theme.soft
           font.family: root.theme.fontFamily
           font.pixelSize: root.theme.type.glyph
@@ -982,6 +1007,7 @@ Item {
               return Model.shortPath(slash > 0 ? r.path.slice(0, slash) : "/", root.home)
             }
             if (r.kind === "dir" && r.outside === true) return "outside your home folder"
+            if (r.kind === "dir" && r.closed === true) return "cannot be opened"
             if (r.kind === "dir" && r.own === false) return "another user's"
             return ""
           }
@@ -996,7 +1022,7 @@ Item {
               if (r.kind === "place") return r.id === "recent" ? "All recent sessions" : "No project"
               return typeof r.name === "string" ? r.name : ""
             }
-            color: lrow.info.outside === true || lrow.info.own === false ? root.theme.soft
+            color: lrow.info.closed === true || lrow.info.own === false ? root.theme.soft
               : (lrow.cursorHere ? root.theme.fg : (lrow.info.hidden === true ? root.theme.readable : root.theme.strong))
             elide: Text.ElideRight
             maximumLineCount: 1
@@ -1093,6 +1119,7 @@ Item {
           cursorShape: Qt.PointingHandCursor
           onEntered: {
             root.focusPane = "places"
+            root._reveal = ""
             root.leftCursor = lrow.index
           }
           onClicked: function (mouse) {

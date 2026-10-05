@@ -1657,6 +1657,8 @@ Harness {
           svc.loadDirs("/home/u")
           root.eq([root.last("dirs").args, root.last("dirs").deadlineMs, root.last("dirs").cap], [["--path", "/home/u"], 8000, 262144 + 1024])
           svc.loadDirs("/home/u/link")
+          svc.loadDirs("/home/u/code", true)
+          root.eq(root.last("dirs").args, ["--path", "/home/u/code", "--hidden"])
           var dirReads = Recorder.of("dirs").length
           svc.loadDirs("relative")
           root.eq(Recorder.of("dirs").length, dirReads)
@@ -1696,7 +1698,7 @@ Harness {
           root.eq(root.last("workspace").args, ["--create"])
           root.eq([svc.sessions["in"]["in"], svc.dirs["/home/u"].entries[0].name, svc.dirs["/home/u/link"].path, svc.dirs["/home/u/real"].path],
                   ["/home/u/proj", "api", "/home/u/real", "/home/u/real"])
-          root.eq([svc.workspace, root.workspaceAnswer && root.workspaceAnswer.created], [{ path: "/home/u/AutoPilot", exists: true }, true])
+          root.eq([svc.workspace, root.workspaceAnswer && root.workspaceAnswer.created], [{ path: "/home/u/AutoPilot", exists: true, refused: false }, true])
           svc.clearDirs()
           root.eq(svc.dirs, {})
           root.eq(JSON.parse(root.last("settings-set").stdin), { limitsShown: "auto" })

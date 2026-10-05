@@ -16,7 +16,8 @@ QMLLINT=/usr/lib/qt6/bin/qmllint
 
 CASES="places_then_tree_from_home tree_keys_open_close_and_hidden folder_place_reads_its_own_list
 no_project_is_made_when_picked home_itself_is_browsable_not_a_working_folder fork_and_the_chosen_session
-typed_path_opens_the_tree_down_to_it hints_follow_the_focused_pane sendto_no_project_caption"
+typed_path_opens_the_tree_down_to_it hints_follow_the_focused_pane sendto_no_project_caption
+reopening_starts_clean a_refused_no_project_folder_is_never_used links_skipped_names_and_cut_listings"
 
 export QT_QPA_PLATFORM=offscreen
 export QT_FORCE_STDERR_LOGGING=1
@@ -106,6 +107,7 @@ Item {
   function fresh(args) {
     svc.calls = []
     svc.workspaceExists = false
+    svc.workspaceRefused = false
     svc.workspace = { path: root.home + "/AutoPilot", exists: false }
     root.notices = []
     root.picks = []
@@ -185,10 +187,14 @@ Item {
   readonly property var tree: ({
     "/home/tester": [root.entry("AutoPilot"), root.entry("code"), root.entry("notes"), root.entry(".config")],
     "/home/tester/code": [root.entry("api", { git: true }), root.entry("web", { git: true }),
-                          root.entry("out", { link: true }), root.entry("vendor", { own: false })],
+                          root.entry("out", { link: true, outside: true }), root.entry("vendor", { own: false })],
     "/home/tester/code/api": [],
-    "/home/tester/notes": []
+    "/home/tester/notes": [root.entry("odd")],
+    "/home/tester/notes/odd": [root.entry("odd-link", { link: true, outside: false })],
+    "/home/tester/.config": [root.entry("app")]
   })
+  // dirs answers that say more than their rows: names left out, a cut listing.
+  readonly property var dirExtras: ({ "/home/tester/notes/odd": { skipped: 2, truncated: true } })
 
   QtObject {
     id: svc
@@ -197,6 +203,7 @@ Item {
     property var dirs: ({})
     property var workspace: null
     property bool workspaceExists: false
+    property bool workspaceRefused: false
     property bool loadingSessions: false
     property bool loadingDirs: false
     property double nowMs: root.nowMs
@@ -226,18 +233,31 @@ Item {
         rows = rows.concat([root.row("codex", "019a0c19-0000-7000-8000-000000000009", "Older than the recent list", path, 60 * 24 * 40, 12)])
       svc.sessions = svc.put(svc.sessions, "in", svc.answer(rows, { cwd: path, "in": path, needsCwd: [] }))
     }
-    function loadDirs(path) {
-      svc.rec("loadDirs", [path])
+    function loadDirs(path, hidden) {
+      svc.rec("loadDirs", [path, hidden === true])
       var entries = root.tree[path]
-      svc.dirs = svc.put(svc.dirs, path, entries === undefined
-        ? { ok: true, path: path, home: root.home, state: "missing", entries: [], truncated: false }
-        : { ok: true, path: path, home: root.home, state: "ok", entries: entries, truncated: false })
+      if (entries === undefined) {
+        svc.dirs = svc.put(svc.dirs, path, { ok: true, path: path, home: root.home, state: "missing", entries: [], truncated: false })
+        return
+      }
+      // Like the helper: hidden names only when asked for, otherwise just counted.
+      var shown = entries.filter(function (e) { return hidden === true || !e.hidden })
+      var a = { ok: true, path: path, home: root.home, state: "ok", entries: shown, truncated: false, skipped: 0,
+                hidden: hidden === true, hiddenCount: entries.length - entries.filter(function (e) { return !e.hidden }).length }
+      var extra = root.dirExtras[path] || {}
+      for (var k in extra) a[k] = extra[k]
+      svc.dirs = svc.put(svc.dirs, path, a)
     }
     function clearDirs() { svc.rec("clearDirs", []); svc.dirs = ({}) }
     function loadWorkspace(create, cb) {
       svc.rec("loadWorkspace", [create === true])
+      if (svc.workspaceRefused) {
+        svc.workspace = { path: root.home + "/AutoPilot", exists: false, refused: true }
+        if (typeof cb === "function") cb(create === true ? { ok: false, code: "invalid_cwd" } : { ok: true, exists: false, refused: true })
+        return
+      }
       if (create === true) svc.workspaceExists = true
-      svc.workspace = { path: root.home + "/AutoPilot", exists: svc.workspaceExists }
+      svc.workspace = { path: root.home + "/AutoPilot", exists: svc.workspaceExists, refused: false }
       if (typeof cb === "function") cb({ ok: true, path: root.home + "/AutoPilot", exists: svc.workspaceExists, created: create === true })
     }
   }
@@ -304,7 +324,7 @@ Item {
       var kids = sheet.leftRows.filter(function (r) { return r.kind === "dir" && r.depth === 2 })
       check(C, kids.map(function (r) { return r.name }).join() === "api,web,out,vendor", "its subfolders: " + kids.map(function (r) { return r.name }).join())
       var out = kids[2]
-      check(C, out.outside === true && out.path === "" && !sheet.leftTakesCursor(out), "a link out of home is shown, never entered")
+      check(C, out.outside === true && out.closed === true && out.path === "" && !sheet.leftTakesCursor(out), "a link out of home is shown, never entered")
       check(C, kids[3].own === false, "another user's folder is marked")
       key(Qt.Key_Right)
       check(C, root.leftRow().path === "/home/tester/code/api" && sheet.placePath === "/home/tester/code/api", "Right again steps into the first child, and the place follows")
@@ -312,9 +332,14 @@ Item {
       check(C, root.leftRow().path === "/home/tester/code", "Left on a closed folder goes to its parent")
       key(Qt.Key_Left)
       check(C, sheet.expanded["/home/tester/code"] !== true, "Left on an open folder closes it")
+      var before = sheet.leftRows.filter(function (r) { return r.kind === "note" }).map(function (r) { return r.text })
       key(Qt.Key_H, Qt.ControlModifier)
       var names = sheet.leftRows.filter(function (r) { return r.kind === "dir" && r.depth === 1 }).map(function (r) { return r.name })
       check(C, sheet.showHidden === true && names.indexOf(".config") === names.length - 1, "Ctrl+H shows hidden folders, last: " + names.join())
+      check(C, root.calls("loadDirs").some(function (c) { return c.args[0] === "/home/tester" && c.args[1] === true }), "and only then asks the helper for hidden names")
+      key(Qt.Key_H, Qt.ControlModifier)
+      check(C, sheet.leftRows.every(function (r) { return r.name !== ".config" }), "Ctrl+H again hides them")
+      key(Qt.Key_H, Qt.ControlModifier)
       key(Qt.Key_Down)
       key(Qt.Key_Return)
       check(C, sheet.focusPane === "list", "Enter moves to the sessions")
@@ -424,6 +449,52 @@ Item {
       check(C, true, "Esc with an empty filter is left to the panel")
       check(C, key(Qt.Key_Escape) === false, "returns false so the panel closes the sheet")
     })
+
+    C = "reopening_starts_clean"
+    step(C, function (C) {
+      fresh({ cwd: "/home/tester/code/api" })
+      check(C, root.leftRow().path === "/home/tester/code/api", "the draft's folder has the left cursor")
+      fresh({})
+      check(C, sheet.placeKind === "recent" && root.leftRow().id === "recent", "a fresh open starts on All recent sessions")
+    })
+    step(C, function (C) {
+      check(C, root.leftRow().id === "recent" && sheet.placeRowIndex === sheet.leftCursor, "and stays there when the tree answers")
+      check(C, sheet.expanded["/home/tester/code"] !== true, "the last open's folders are closed again")
+    })
+
+    C = "a_refused_no_project_folder_is_never_used"
+    step(C, function (C) {
+      svc.calls = []
+      root.notices = []
+      root.picks = []
+      svc.workspaceRefused = true
+      sheet.open({})
+      sheet.selectLeft(root.leftIndex("place", "workspace"))
+      var refusal = "~/AutoPilot cannot be used: it has to be a folder of yours, not a link, that nobody else can write. Fix it, or pick another folder."
+      check(C, sheet.placeFact === refusal, "says why: " + sheet.placeFact)
+      key(Qt.Key_Home)
+      key(Qt.Key_Return)
+      check(C, root.picks.length === 0 && lastNotice().text === refusal, "Enter refuses with the same sentence")
+      check(C, root.calls("loadWorkspace").every(function (c) { return c.args[0] === false }), "nothing is made")
+      svc.workspaceRefused = false
+    })
+
+    C = "links_skipped_names_and_cut_listings"
+    step(C, function (C) {
+      fresh({})
+      sheet.setExpanded("/home/tester/notes", true)
+      sheet.setExpanded("/home/tester/notes/odd", true)
+      var link = sheet.leftRows.filter(function (r) { return r.name === "odd-link" })[0]
+      check(C, link && link.closed === true && link.outside === false && !sheet.leftTakesCursor(link), "a link the helper could not resolve cleanly stays closed")
+      var notes = sheet.leftRows.filter(function (r) { return r.kind === "note" }).map(function (r) { return r.text })
+      check(C, notes.indexOf("2 folders with names that cannot be shown are left out.") >= 0, "left-out names are counted: " + notes.join(" | "))
+      check(C, notes.indexOf("Not every folder here is listed. Type a path to reach one.") >= 0, "a cut listing says so")
+      root.typeText("~/.config/app")
+    })
+    step(C, function (C) {
+      check(C, sheet.showHidden === true && sheet.expanded["/home/tester/.config"] === true, "a typed path inside a hidden folder shows hidden folders")
+      check(C, root.leftRow().path === "/home/tester/.config/app", "and reaches it")
+    }, function () { return root.leftRow().path === "/home/tester/.config/app" })
 
     C = "sendto_no_project_caption"
     step(C, function (C) {

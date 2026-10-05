@@ -51,7 +51,7 @@ Item {
   // Folder path -> Dirs answer, for the session picker's folder tree (a failed read is stored
   // as {ok: false, path, code, message}); cleared each time the picker opens.
   readonly property var dirs: root._dirs
-  // The No project folder: {path, exists}, null until the first workspace answer.
+  // The No project folder: {path, exists, refused}, null until the first workspace answer.
   readonly property var workspace: root._workspace
   readonly property var settings: root._settings
   // harness -> Models answer (a failed read stores {ok: false, models: [], reason}).
@@ -350,11 +350,12 @@ Item {
     })
   }
 
-  // One folder of the picker's tree. The answer is stored under the path asked for and,
-  // when the helper resolved it elsewhere, under its real path too.
-  function loadDirs(path) {
+  // One folder of the picker's tree; `hidden` asks for hidden folders too (otherwise the helper
+  // only counts them). The answer is stored under the path asked for and, when the helper
+  // resolved it elsewhere, under its real path too.
+  function loadDirs(path, hidden) {
     if (!root._validCwd(path)) return
-    root._request("dirs", ["--path", path], null, function (res) {
+    root._request("dirs", ["--path", path].concat(hidden === true ? ["--hidden"] : []), null, function (res) {
       if (res.ok !== true) {
         if (res.code === "superseded") return
         root._dirs = root._with(root._dirs, path, { ok: false, path: path, code: res.code, message: res.message })
@@ -371,7 +372,7 @@ Item {
   // The No project folder; `create` makes it first. cb(res) gets the answer either way.
   function loadWorkspace(create, cb) {
     root._request("workspace", create === true ? ["--create"] : [], null, function (res) {
-      if (res.ok === true) root._workspace = { path: res.path, exists: res.exists === true }
+      if (res.ok === true) root._workspace = { path: res.path, exists: res.exists === true, refused: res.refused === true }
       else root._noteReadError(res)
       if (typeof cb === "function") cb(res)
     })
