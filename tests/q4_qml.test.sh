@@ -1652,13 +1652,16 @@ Harness {
           root.eq(Recorder.of("sessions").length, folderReads, "a relative folder is never asked for")
           Recorder.answers["dirs"] = function (args) {
             return { ok: true, path: args[1] === "/home/u/link" ? "/home/u/real" : args[1], home: "/home/u", state: "ok",
-                     entries: [ { name: "api", hidden: false, git: true, own: true, link: false, target: null } ], truncated: false }
+                     entries: [ { name: "api", hidden: false, git: true, own: true, link: false, target: null } ], truncated: false,
+                     hidden: args[2] === "--hidden" }
           }
           svc.loadDirs("/home/u")
           root.eq([root.last("dirs").args, root.last("dirs").deadlineMs, root.last("dirs").cap], [["--path", "/home/u"], 8000, 262144 + 1024])
           svc.loadDirs("/home/u/link")
           svc.loadDirs("/home/u/code", true)
           root.eq(root.last("dirs").args, ["--path", "/home/u/code", "--hidden"])
+          // A plain read answered after a read with hidden names never replaces it.
+          svc.loadDirs("/home/u/code")
           var dirReads = Recorder.of("dirs").length
           svc.loadDirs("relative")
           root.eq(Recorder.of("dirs").length, dirReads)
@@ -1698,6 +1701,7 @@ Harness {
           root.eq(root.last("workspace").args, ["--create"])
           root.eq([svc.sessions["in"]["in"], svc.dirs["/home/u"].entries[0].name, svc.dirs["/home/u/link"].path, svc.dirs["/home/u/real"].path],
                   ["/home/u/proj", "api", "/home/u/real", "/home/u/real"])
+          root.eq([Recorder.of("dirs").filter(function (c) { return c.args[1] === "/home/u/code" }).length, svc.dirs["/home/u/code"].hidden], [2, true])
           root.eq([svc.workspace, root.workspaceAnswer && root.workspaceAnswer.created], [{ path: "/home/u/AutoPilot", exists: true, refused: false }, true])
           svc.clearDirs()
           root.eq(svc.dirs, {})

@@ -17,7 +17,10 @@ QMLLINT=/usr/lib/qt6/bin/qmllint
 CASES="places_then_tree_from_home tree_keys_open_close_and_hidden folder_place_reads_its_own_list
 no_project_is_made_when_picked home_itself_is_browsable_not_a_working_folder fork_and_the_chosen_session
 typed_path_opens_the_tree_down_to_it hints_follow_the_focused_pane sendto_no_project_caption
-reopening_starts_clean a_refused_no_project_folder_is_never_used links_skipped_names_and_cut_listings"
+reopening_starts_clean a_refused_no_project_folder_is_never_used links_skipped_names_and_cut_listings
+late_answers_keep_the_cursor_the_place_and_the_highlight no_project_is_made_once_and_late_answers_are_dropped
+hover_counts_only_when_the_pointer_moves folders_closed_or_hidden_under_the_cursor typed_paths_and_refusals
+the_tree_scrolls_to_a_revealed_folder"
 
 export QT_QPA_PLATFORM=offscreen
 export QT_FORCE_STDERR_LOGGING=1
@@ -103,9 +106,32 @@ Item {
     return -1
   }
   function leftRow() { return sheet.leftRows[sheet.leftCursor] || {} }
+  function find(item, pred) {
+    if (!item) return null
+    if (pred(item)) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var hit = root.find(kids[i], pred)
+      if (hit) return hit
+    }
+    return null
+  }
+  function findAll(item, pred, out) {
+    out = out || []
+    if (!item) return out
+    if (pred(item)) out.push(item)
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) root.findAll(kids[i], pred, out)
+    return out
+  }
+  property double mark: 0
+  function since(ms) { return Date.now() - root.mark >= ms }
   function step(name, run, until) { root.steps.push({ name: name, run: run, until: until || null }) }
-  function fresh(args) {
+  function fresh(args, hold) {
+    svc.hold = hold || {}
+    svc.queue = []
     svc.calls = []
+    svc.sessions = ({})
     svc.workspaceExists = false
     svc.workspaceRefused = false
     svc.workspace = { path: root.home + "/AutoPilot", exists: false }
@@ -185,7 +211,12 @@ Item {
     return e
   }
   readonly property var tree: ({
-    "/home/tester": [root.entry("AutoPilot"), root.entry("code"), root.entry("notes"), root.entry(".config")],
+    "/home/tester": [root.entry("AutoPilot"), root.entry("code"), root.entry("many"), root.entry("notes"), root.entry(".config")],
+    "/home/tester/many": (function () {
+      var out = []
+      for (var n = 0; n < 40; n++) out.push(root.entry("d" + (n < 10 ? "0" : "") + n))
+      return out
+    })(),
     "/home/tester/code": [root.entry("api", { git: true }), root.entry("web", { git: true }),
                           root.entry("out", { link: true, outside: true }), root.entry("vendor", { own: false })],
     "/home/tester/code/api": [],
@@ -209,6 +240,18 @@ Item {
     property double nowMs: root.nowMs
     property var agents: ({})
     function rec(name, args) { svc.calls = svc.calls.concat([{ name: name, args: args }]) }
+    // Held answers wait in the queue until flush(name), so tests can reorder what lands when.
+    property var hold: ({})
+    property var queue: []
+    function later(name, fn) {
+      if (svc.hold[name] === true) svc.queue = svc.queue.concat([{ name: name, fn: fn }])
+      else fn()
+    }
+    function flush(name) {
+      var run = svc.queue.filter(function (q) { return q.name === name })
+      svc.queue = svc.queue.filter(function (q) { return q.name !== name })
+      for (var i = 0; i < run.length; i++) run[i].fn()
+    }
     function agentFor(h) { return svc.agents[h] || null }
     function answer(rows, extra) {
       var a = { ok: true, harness: null, nowMs: root.nowMs, sessions: rows, counts: {}, truncated: {}, errors: {},
@@ -224,17 +267,24 @@ Item {
     }
     function loadSessions(harness, cwd) {
       svc.rec("loadSessions", [harness, cwd === undefined ? null : cwd])
-      svc.sessions = svc.put(svc.sessions, "all", svc.answer(root.recentRows, {}))
+      svc.later("loadSessions", function () { svc.sessions = svc.put(svc.sessions, "all", svc.answer(root.recentRows, {})) })
     }
     function loadFolderSessions(path) {
       svc.rec("loadFolderSessions", [path])
       var rows = root.recentRows.filter(function (r) { return r.cwd === path })
       if (path === "/home/tester/code/api")
         rows = rows.concat([root.row("codex", "019a0c19-0000-7000-8000-000000000009", "Older than the recent list", path, 60 * 24 * 40, 12)])
-      svc.sessions = svc.put(svc.sessions, "in", svc.answer(rows, { cwd: path, "in": path, needsCwd: [] }))
+      if (path === "/home/tester/code/web")
+        rows = rows.concat([root.row("claude", "3f2a0c19-0000-4000-8000-000000000010", "Fresh web session", path, 10, 2)])
+      svc.later("loadFolderSessions", function () {
+        svc.sessions = svc.put(svc.sessions, "in", svc.answer(rows, { cwd: path, "in": path, needsCwd: [] }))
+      })
     }
     function loadDirs(path, hidden) {
       svc.rec("loadDirs", [path, hidden === true])
+      svc.later("loadDirs", function () { svc.answerDirs(path, hidden) })
+    }
+    function answerDirs(path, hidden) {
       var entries = root.tree[path]
       if (entries === undefined) {
         svc.dirs = svc.put(svc.dirs, path, { ok: true, path: path, home: root.home, state: "missing", entries: [], truncated: false })
@@ -251,6 +301,9 @@ Item {
     function clearDirs() { svc.rec("clearDirs", []); svc.dirs = ({}) }
     function loadWorkspace(create, cb) {
       svc.rec("loadWorkspace", [create === true])
+      svc.later("loadWorkspace", function () { svc.answerWorkspace(create, cb) })
+    }
+    function answerWorkspace(create, cb) {
       if (svc.workspaceRefused) {
         svc.workspace = { path: root.home + "/AutoPilot", exists: false, refused: true }
         if (typeof cb === "function") cb(create === true ? { ok: false, code: "invalid_cwd" } : { ok: true, exists: false, refused: true })
@@ -307,7 +360,8 @@ Item {
       var root0 = sheet.leftRows[root.leftIndex("dir", "/home/tester")]
       check(C, root0 && root0.depth === 0 && root0.expanded === true && root0.name === "~", "the tree starts open at ~")
       var names = sheet.leftRows.filter(function (r) { return r.kind === "dir" && r.depth === 1 }).map(function (r) { return r.name })
-      check(C, JSON.stringify(names) === JSON.stringify(["AutoPilot", "code", "notes"]), "hidden folders stay hidden: " + JSON.stringify(names))
+      check(C, JSON.stringify(names) === JSON.stringify(["AutoPilot", "code", "many", "notes"]), "hidden folders stay hidden: " + JSON.stringify(names))
+      check(C, root.calls("loadDirs").every(function (c) { return c.args[1] === false }), "hidden names are not asked for")
       check(C, JSON.stringify(sheet.marksFor("/home/tester/code/api")) === JSON.stringify([{ harness: "claude", n: 1 }, { harness: "gemini", n: 1 }]),
             "agent marks per folder: " + JSON.stringify(sheet.marksFor("/home/tester/code/api")))
       check(C, sheet.countBelow("/home/tester/code") === 3, "sessions in the folders below: " + sheet.countBelow("/home/tester/code"))
@@ -332,7 +386,7 @@ Item {
       check(C, root.leftRow().path === "/home/tester/code", "Left on a closed folder goes to its parent")
       key(Qt.Key_Left)
       check(C, sheet.expanded["/home/tester/code"] !== true, "Left on an open folder closes it")
-      var before = sheet.leftRows.filter(function (r) { return r.kind === "note" }).map(function (r) { return r.text })
+      check(C, root.calls("loadDirs").every(function (c) { return c.args[1] === false }), "no hidden names before Ctrl+H")
       key(Qt.Key_H, Qt.ControlModifier)
       var names = sheet.leftRows.filter(function (r) { return r.kind === "dir" && r.depth === 1 }).map(function (r) { return r.name })
       check(C, sheet.showHidden === true && names.indexOf(".config") === names.length - 1, "Ctrl+H shows hidden folders, last: " + names.join())
@@ -401,14 +455,19 @@ Item {
       check(C, sheet.placeFact === "Agents do not start in your home folder itself. Pick a folder inside it, or No project.", "says why: " + sheet.placeFact)
       key(Qt.Key_N, Qt.ControlModifier)
       check(C, root.picks.length === 0 && lastNotice().text === "Your home folder itself is not allowed. Pick a folder inside it, or No project.", "Ctrl+N refuses: " + lastNotice().text)
-      check(C, root.calls("loadFolderSessions").length === 0, "home is never read as a folder list")
+      root.mark = Date.now()
     })
+    step(C, function (C) {
+      check(C, root.calls("loadFolderSessions").length === 0, "home is never read as a folder list, even after the folder timer")
+    }, function () { return root.since(450) })
 
     C = "fork_and_the_chosen_session"
     step(C, function (C) {
       fresh({ harness: "claude", cwd: "/home/tester/code/api", sessionId: "3f2a0c19-0000-4000-8000-000000000001" })
       check(C, sheet.placeKind === "folder" && sheet.placePath === "/home/tester/code/api", "opens on the draft's folder")
       check(C, sheet.filter === "claude" && sheet.rows.length === 1, "the agent filter as before")
+      var marks = root.findAll(sheet, function (i) { return i.text !== undefined && String(i.text).indexOf(" now") > 0 && i.visible })
+      check(C, marks.length === 1, "the draft's session carries the check: " + marks.length)
       key(Qt.Key_F, Qt.ControlModifier)
       var p = root.lastPick()
       check(C, p && p.mode === "fork" && p.sessionId === "3f2a0c19-0000-4000-8000-000000000001", "Ctrl+F forks: " + JSON.stringify(p))
@@ -445,9 +504,9 @@ Item {
       check(C, sheet.hints.indexOf("Tab folders") > 0 && sheet.hints.indexOf("Ctrl+F fork") > 0 && sheet.hints.indexOf("←/→ agent") > 0, "sessions hints: " + sheet.hints)
       key(Qt.Key_Tab)
       check(C, sheet.hints.indexOf("Tab sessions") > 0 && sheet.hints.indexOf("Ctrl+H hidden folders") > 0 && sheet.hints.indexOf("←/→ close or open") > 0, "folder hints: " + sheet.hints)
-      key(Qt.Key_Escape)
-      check(C, true, "Esc with an empty filter is left to the panel")
-      check(C, key(Qt.Key_Escape) === false, "returns false so the panel closes the sheet")
+      root.typeText("fix")
+      check(C, key(Qt.Key_Escape) === true && sheet.query === "", "Esc clears the filter first")
+      check(C, key(Qt.Key_Escape) === false, "then returns false so the panel closes the sheet")
     })
 
     C = "reopening_starts_clean"
@@ -495,6 +554,134 @@ Item {
       check(C, sheet.showHidden === true && sheet.expanded["/home/tester/.config"] === true, "a typed path inside a hidden folder shows hidden folders")
       check(C, root.leftRow().path === "/home/tester/.config/app", "and reaches it")
     }, function () { return root.leftRow().path === "/home/tester/.config/app" })
+
+    C = "late_answers_keep_the_cursor_the_place_and_the_highlight"
+    step(C, function (C) {
+      fresh({}, { loadSessions: true })
+      sheet.focusPane = "places"
+      sheet.selectLeft(root.leftIndex("dir", "/home/tester/code"))
+      check(C, sheet.leftRows.every(function (r) { return r.kind !== "recent" }), "no recent folders yet")
+      svc.flush("loadSessions")
+      check(C, sheet.leftRows.some(function (r) { return r.kind === "recent" }), "recent folders arrive above the tree")
+      check(C, root.leftRow().path === "/home/tester/code" && sheet.placeRowIndex === sheet.leftCursor, "the cursor stays on its folder")
+      fresh({}, { loadFolderSessions: true })
+      sheet.selectLeft(root.leftIndex("recent", "/home/tester/code/web"))
+      key(Qt.Key_Down)
+      check(C, sheet.cursor === 1 && sheet.rows[0].title === "Regenerate the client", "the recent row is highlighted")
+      root.mark = Date.now()
+    })
+    step(C, function (C) {
+      svc.flush("loadFolderSessions")
+      check(C, sheet.rows.length === 2 && sheet.rows[0].title === "Fresh web session", "a newer session lands above it")
+      check(C, sheet.rows[sheet.cursor - 1].title === "Regenerate the client", "the highlight stays on the same session")
+      sheet.selectLeft(root.leftIndex("recent", "/home/tester/code/api"))
+      root.mark = Date.now()
+    }, function () { return root.since(400) && root.last("loadFolderSessions") !== null })
+    step(C, function (C) {
+      sheet.selectLeft(root.leftIndex("recent", "/home/tester/code/web"))
+      root.mark = Date.now()
+    }, function () { return root.since(400) })
+    step(C, function (C) {
+      var asked = root.calls("loadFolderSessions").map(function (c) { return c.args[0] })
+      check(C, asked.indexOf("/home/tester/code/api") >= 0, "the api list was asked for: " + asked.join())
+      svc.flush("loadFolderSessions")
+      check(C, sheet.activePath === "/home/tester/code/web" && sheet.rows.every(function (r) { return r.cwd === "/home/tester/code/web" }),
+            "a late answer for another folder never shows here")
+      check(C, sheet.marksFor("/home/tester/code/api").length === 3, "and still counts for its own folder")
+    }, function () { return root.since(400) })
+
+    C = "no_project_is_made_once_and_late_answers_are_dropped"
+    step(C, function (C) {
+      fresh({}, { loadWorkspace: true })
+      sheet.selectLeft(root.leftIndex("place", "workspace"))
+      key(Qt.Key_Home)
+      key(Qt.Key_Return)
+      key(Qt.Key_Return)
+      check(C, root.calls("loadWorkspace").filter(function (c) { return c.args[0] === true }).length === 1, "Enter twice asks once")
+      sheet.open({})
+      svc.flush("loadWorkspace")
+      check(C, root.picks.length === 0, "an answer for an earlier open picks nothing")
+      svc.hold = {}
+      sheet.selectLeft(root.leftIndex("place", "workspace"))
+      key(Qt.Key_Home)
+      key(Qt.Key_Return)
+      check(C, root.picks.length === 1 && root.lastPick().cwd === "/home/tester/AutoPilot", "the next open makes it and picks it")
+    })
+
+    C = "hover_counts_only_when_the_pointer_moves"
+    step(C, function (C) {
+      fresh({})
+      check(C, sheet.pointerMoved(sheet, 40, 40) === false, "the first position after open only sets where the pointer is")
+      check(C, sheet.pointerMoved(sheet, 40, 40) === false, "rows moving under a resting pointer are not hover")
+      check(C, sheet.pointerMoved(sheet, 44, 40) === true, "a real move is")
+      var tree = root.find(sheet, function (i) { return i.count !== undefined && i.count === sheet.leftRows.length && i.itemAtIndex !== undefined })
+      var item = tree ? tree.itemAtIndex(root.leftIndex("dir", "/home/tester/code")) : null
+      check(C, item !== null && typeof item.hovered === "function", "the tree row reacts through hovered()")
+      if (item) {
+        sheet.focusPane = "list"
+        var before = sheet.leftCursor
+        item.hovered(5, 5)
+        item.hovered(5, 5)
+        check(C, sheet.focusPane === "list" || sheet.leftCursor === root.leftIndex("dir", "/home/tester/code"), "a resting pointer leaves the focus alone, a moved one takes it")
+        item.hovered(9, 5)
+        check(C, sheet.focusPane === "places" && sheet.leftCursor === root.leftIndex("dir", "/home/tester/code") && sheet.placePath === "", "hover moves the highlight, never the place")
+      }
+    })
+
+    C = "folders_closed_or_hidden_under_the_cursor"
+    step(C, function (C) {
+      fresh({})
+      sheet.focusPane = "places"
+      key(Qt.Key_H, Qt.ControlModifier)
+      sheet.setExpanded("/home/tester/.config", true)
+      sheet.selectLeft(root.leftIndex("dir", "/home/tester/.config/app"))
+      check(C, sheet.placePath === "/home/tester/.config/app", "a folder inside a hidden one is the place")
+      key(Qt.Key_H, Qt.ControlModifier)
+      check(C, sheet.placePath === "/home/tester" && root.leftRow().path === "/home/tester" && sheet.placeRowIndex === sheet.leftCursor,
+            "hiding it moves cursor and place to the nearest listed folder: " + sheet.placePath)
+      sheet.selectLeft(root.leftIndex("dir", "/home/tester/code"))
+      key(Qt.Key_Right)
+      key(Qt.Key_Right)
+      key(Qt.Key_Right)
+      check(C, root.leftRow().path === "/home/tester/code/api", "Right steps into the first child")
+      key(Qt.Key_Right)
+      key(Qt.Key_Right)
+      check(C, root.leftRow().path === "/home/tester/code/api" && sheet.expanded["/home/tester/code/api"] === true,
+            "Right on an open folder without subfolders stays put: " + root.leftRow().path)
+      sheet.setExpanded("/home/tester/code", false)
+      check(C, root.leftRow().path === "/home/tester/code" && sheet.placePath === "/home/tester/code", "closing a parent by mouse moves to it")
+    })
+
+    C = "typed_paths_and_refusals"
+    step(C, function (C) {
+      fresh({})
+      root.typeText("~/code/../notes//")
+      check(C, sheet.queryPath === "/home/tester/notes", "dot-dot and doubled slashes resolve: " + sheet.queryPath)
+      key(Qt.Key_U, Qt.ControlModifier, "")
+      root.typeText("/")
+      key(Qt.Key_Return)
+      check(C, root.picks.length === 0 && lastNotice().text === "The root folder is not allowed. Pick a folder inside your home folder, or No project.", "/ is refused: " + lastNotice().text)
+      key(Qt.Key_U, Qt.ControlModifier, "")
+      sheet.setExpanded("/home/tester/code", true)
+      sheet.focusPane = "places"
+      sheet.leftCursor = root.leftIndex("dir", "/home/tester/code/vendor")
+      key(Qt.Key_N, Qt.ControlModifier)
+      check(C, root.picks.length === 0 && lastNotice().text === "~/code/vendor belongs to another user, so no agent starts there. Pick a folder of yours.",
+            "another user's folder is refused: " + lastNotice().text)
+    })
+
+    C = "the_tree_scrolls_to_a_revealed_folder"
+    step(C, function (C) {
+      fresh({ cwd: "/home/tester/many/d35" })
+      root.mark = Date.now()
+    })
+    step(C, function (C) {
+      var tree = root.find(sheet, function (i) { return i.count !== undefined && i.count === sheet.leftRows.length && i.itemAtIndex !== undefined })
+      check(C, root.leftRow().path === "/home/tester/many/d35", "the cursor is on the draft's folder")
+      var item = tree ? tree.itemAtIndex(sheet.leftCursor) : null
+      check(C, tree !== null && item !== null && item.y >= tree.contentY && item.y + item.height <= tree.contentY + tree.height,
+            "and it is on screen: " + (item ? item.y + " in " + tree.contentY + "+" + tree.height : "no item"))
+    }, function () { return root.since(200) })
 
     C = "sendto_no_project_caption"
     step(C, function (C) {

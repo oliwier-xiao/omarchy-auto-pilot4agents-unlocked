@@ -356,6 +356,10 @@ Item {
   function loadDirs(path, hidden) {
     if (!root._validCwd(path)) return
     root._request("dirs", ["--path", path].concat(hidden === true ? ["--hidden"] : []), null, function (res) {
+      // A plain read that lands after a read with hidden names never replaces it: the picker
+      // filters hidden names itself, and asked for them because it shows them.
+      var held = root._dirs[path]
+      if (hidden !== true && held && held.ok === true && held.hidden === true) return
       if (res.ok !== true) {
         if (res.code === "superseded") return
         root._dirs = root._with(root._dirs, path, { ok: false, path: path, code: res.code, message: res.message })

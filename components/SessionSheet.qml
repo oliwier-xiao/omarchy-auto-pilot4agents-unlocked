@@ -65,6 +65,29 @@ Item {
   property bool _cursorTouched: false
   // leftKeyOf the row under the left cursor.
   property string _leftKey: ""
+  // harness + id of the highlighted session, so a list that refills keeps it highlighted.
+  property string _rowKey: ""
+  // Bumped by every open; an answer from an earlier open is dropped.
+  property int _openGen: 0
+  // A No project folder is being made.
+  property bool _making: false
+  // The last pointer position seen; hover counts only when the pointer itself moved, never
+  // when rows move under a pointer resting over the sheet.
+  property real _px: -1
+  property real _py: -1
+  property bool _pointerKnown: false
+
+  function pointerMoved(item, x, y) {
+    var p = item.mapToItem(null, x, y)
+    var known = root._pointerKnown
+    var moved = p.x !== root._px || p.y !== root._py
+    root._px = p.x
+    root._py = p.y
+    root._pointerKnown = true
+    return known && moved
+  }
+
+  function rowKeyOf(r) { return r ? r.harness + " " + r.id : "" }
 
   readonly property var glyph: ({
     folder: "\uDB80\uDE4B",       // md-folder                     U+F024B
@@ -108,15 +131,21 @@ Item {
   // Every folder list (`sessions --in`) read since the sheet opened, by folder, so going
   // back to a folder is instant and its marks keep their counts after another one is read.
   property var _folderLists: ({})
+  // Folders whose own list could not be read, folder -> the helper's sentence.
+  property var _folderErrors: ({})
   readonly property var latestIn: root.service && root.service.sessions ? root.service.sessions["in"] : null
   onLatestInChanged: {
     var r = root.latestIn
-    if (!r || r.ok !== true || typeof r["in"] !== "string" || r["in"] === "") return
-    var next = {}
-    for (var k in root._folderLists) next[k] = root._folderLists[k]
-    next[r["in"]] = r
-    root._folderLists = next
+    if (!r || typeof r["in"] !== "string" || r["in"] === "") return
+    var lists = {}, errors = {}
+    for (var k in root._folderLists) if (k !== r["in"] || r.ok === true) lists[k] = root._folderLists[k]
+    for (var e in root._folderErrors) if (e !== r["in"]) errors[e] = root._folderErrors[e]
+    if (r.ok === true) lists[r["in"]] = r
+    else if (!lists.hasOwnProperty(r["in"])) errors[r["in"]] = typeof r.message === "string" && r.message !== "" ? r.message : "The helper did not answer."
+    root._folderLists = lists
+    root._folderErrors = errors
   }
+  readonly property bool folderFailed: root.activePath !== "" && root.inResult === null && root._folderErrors.hasOwnProperty(root.activePath)
 
   // The folder's own list, once `sessions --in` answered for this very folder.
   readonly property var inResult: root.activePath !== "" && root._folderLists.hasOwnProperty(root.activePath)
@@ -354,10 +383,12 @@ Item {
     if (d === undefined || d.ok !== true || (root.showHidden && d.hidden !== true)) root.service.loadDirs(path, root.showHidden)
   }
 
-  function toggleHidden() {
-    root.showHidden = !root.showHidden
+  function setShowHidden(on) {
+    root.showHidden = on === true
     if (root.showHidden) for (var path in root.expanded) root.readDirs(path)
   }
+
+  function toggleHidden() { root.setShowHidden(!root.showHidden) }
 
   // Opens every folder from the home folder down to path's parent, and moves the left
   // cursor to path once its row is listed.
@@ -365,7 +396,7 @@ Item {
     if (root.home === "" || path === "" || (path !== root.home && path.indexOf(root.home + "/") !== 0)) return
     var parts = path.slice(root.home.length).split("/").filter(function (s) { return s !== "" })
     // A folder inside a hidden one is reached only with hidden folders shown.
-    if (!root.showHidden && parts.some(function (s) { return s.charAt(0) === "." })) root.showHidden = true
+    if (!root.showHidden && parts.some(function (s) { return s.charAt(0) === "." })) root.setShowHidden(true)
     var next = {}
     for (var k in root.expanded) next[k] = true
     var at = root.home
@@ -410,8 +441,12 @@ Item {
     }
     if (dir > 0) {
       if (r.closed === true || r.path === "") return
-      if (!r.expanded) root.setExpanded(r.path, true)
-      else root.moveLeft(1)
+      if (!r.expanded) {
+        root.setExpanded(r.path, true)
+        return
+      }
+      var next = root.leftRows[root.leftCursor + 1]
+      if (next && next.kind === "dir" && next.depth === r.depth + 1 && root.leftTakesCursor(next)) root.selectLeft(root.leftCursor + 1)
       return
     }
     if (r.expanded) {
@@ -475,8 +510,9 @@ Item {
   }
 
   // Facts about the folder from the tree listing of its parent (or its own).
-  readonly property var activeEntry: {
-    var p = root.activePath
+  readonly property var activeEntry: root.entryFor(root.activePath)
+
+  function entryFor(p) {
     if (p === "" || !root.service || !root.service.dirs) return null
     var own = root.service.dirs[p]
     var slash = p.lastIndexOf("/")
@@ -485,6 +521,15 @@ Item {
     if (parent && Array.isArray(parent.entries))
       for (var i = 0; i < parent.entries.length; i++) if (parent.entries[i].name === name) return parent.entries[i]
     return own && own.ok === true ? { git: own.git === true, own: own.own !== false } : null
+  }
+
+  // The sentence for a folder no session can start in, or "".
+  function refusalFor(cwd) {
+    if (cwd === root.home) return "Your home folder itself is not allowed. Pick a folder inside it, or No project."
+    if (cwd === "/") return "The root folder is not allowed. Pick a folder inside your home folder, or No project."
+    var e = root.entryFor(cwd)
+    if (e && e.own === false) return Model.shortPath(cwd, root.home) + " belongs to another user, so no agent starts there. Pick a folder of yours."
+    return ""
   }
 
   readonly property string placeFact: {
@@ -499,7 +544,8 @@ Item {
     if (root.activeEntry && root.activeEntry.git === true) parts.push("git")
     if (root.activeEntry && root.activeEntry.own === false) parts.push("owned by another user, agents cannot start here")
     var n = root.placeRows.length
-    parts.push(root.folderLoading && n === 0 ? "reading sessions…" : (n === 1 ? "1 session" : n + " sessions"))
+    if (root.folderFailed) parts.push("its own list could not be read, the recent sessions here are shown")
+    else parts.push(root.folderLoading && n === 0 ? "reading sessions…" : (n === 1 ? "1 session" : n + " sessions"))
     return parts.join("  ·  ")
   }
 
@@ -512,8 +558,16 @@ Item {
       t = root.home + t.slice(1)
     }
     if (t.charAt(0) !== "/") return ""
-    t = t.replace(/\/+$/, "")
-    return t === "" ? "/" : t
+    // "." and ".." and doubled slashes are resolved, so the path matches what agents record.
+    var out = []
+    var parts = t.split("/")
+    for (var i = 0; i < parts.length; i++) {
+      var s = parts[i]
+      if (s === "" || s === ".") continue
+      if (s === "..") out.pop()
+      else out.push(s)
+    }
+    return "/" + out.join("/")
   }
 
   function countFor(id) {
@@ -576,6 +630,11 @@ Item {
     root._reveal = ""
     root._cursorTouched = false
     root._folderLists = ({})
+    root._folderErrors = ({})
+    root._openGen += 1
+    root._making = false
+    root._pointerKnown = false
+    root._rowKey = ""
     var opened = {}
     if (root.home !== "") opened[root.home] = true
     root.expanded = opened
@@ -645,7 +704,7 @@ Item {
     // Pi resumes a session by its file, so a row without one cannot be resumed.
     var path = r.harness === "pi" && typeof r.path === "string" && r.path.charAt(0) === "/" ? r.path : null
     if (r.harness === "pi" && path === null) {
-      root.noticeRequested("That Pi session has no file to resume. Pick another, or start a new session.", "warn", null)
+      root.noticeRequested("That Pi session has no file to " + how + ". Pick another, or start a new session.", "warn", null)
       return
     }
     root.picked({
@@ -679,9 +738,10 @@ Item {
       root.noticeRequested("Type a folder such as ~/proj/api, or press Ctrl+N on a session.", "warn", null)
       return
     }
-    // The helper never starts a session in the home folder itself; say so before asking it.
-    if (cwd === root.home) {
-      root.noticeRequested("Your home folder itself is not allowed. Pick a folder inside it, or No project.", "warn", null)
+    // Say what the helper would refuse before asking it.
+    var refusal = root.refusalFor(cwd)
+    if (refusal !== "") {
+      root.noticeRequested(refusal, "warn", null)
       return
     }
     if (root.agentBlocked(harness)) {
@@ -693,11 +753,19 @@ Item {
       return
     }
     if (cwd === root.workspacePath && !root.workspaceExists && root.service && typeof root.service.loadWorkspace === "function") {
+      // One request at a time, and its answer counts only while this same open is up.
+      if (root._making) return
+      root._making = true
+      var gen = root._openGen
       root.service.loadWorkspace(true, function (res) {
+        if (gen !== root._openGen) return
+        root._making = false
+        if (!root.active) return
         if (res && res.ok === true && typeof res.path === "string")
           root.picked({ harness: harness, mode: "new", sessionId: null, cwd: res.path, title: "No project", sessionPath: null })
         else
-          root.noticeRequested(root.workspaceRefusal, "warn", null)
+          root.noticeRequested(res && res.code !== "invalid_cwd" && typeof res.message === "string" && res.message !== ""
+            ? res.message : root.workspaceRefusal, "warn", null)
       })
       return
     }
@@ -717,10 +785,14 @@ Item {
     root.resetCursor()
   }
 
-  function moveCursor(delta) {
+  // The right cursor moved by hand: remember the session under it, even when the index stays.
+  function setCursorByHand(index) {
     root._cursorTouched = true
-    root.cursor = Math.max(0, Math.min(root.rowCount - 1, root.cursor + delta))
+    root.cursor = Math.max(0, Math.min(root.rowCount - 1, index))
+    root._rowKey = root.cursor > 0 ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
   }
+
+  function moveCursor(delta) { root.setCursorByHand(root.cursor + delta) }
 
   function editQuery(text) {
     root.query = text
@@ -764,8 +836,8 @@ Item {
       if (key === Qt.Key_Down) { root.moveCursor(1); return true }
       if (key === Qt.Key_PageUp) { root.moveCursor(-8); return true }
       if (key === Qt.Key_PageDown) { root.moveCursor(8); return true }
-      if (key === Qt.Key_Home) { root._cursorTouched = true; root.cursor = 0; return true }
-      if (key === Qt.Key_End) { root._cursorTouched = true; root.cursor = root.rowCount - 1; return true }
+      if (key === Qt.Key_Home) { root.setCursorByHand(0); return true }
+      if (key === Qt.Key_End) { root.setCursorByHand(root.rowCount - 1); return true }
     }
     if (Util.editsFilter(event, root.query)) {
       root.editQuery(Util.editedFilter(event, root.query))
@@ -779,19 +851,43 @@ Item {
     return false
   }
 
-  onCursorChanged: if (list.count > 0) list.positionViewAtIndex(root.cursor, ListView.Contain)
+  // Scrolled once the views have the new rows: a jump that also adds rows lands past the old end.
+  onCursorChanged: {
+    root._rowKey = root.cursor > 0 ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
+    Qt.callLater(function () { if (list.count > root.cursor) list.positionViewAtIndex(root.cursor, ListView.Contain) })
+  }
   onLeftCursorChanged: {
     root._leftKey = root.leftKeyOf(root.leftRows[root.leftCursor])
-    if (tree.count > 0) tree.positionViewAtIndex(root.leftCursor, ListView.Contain)
+    Qt.callLater(function () { if (tree.count > root.leftCursor) tree.positionViewAtIndex(root.leftCursor, ListView.Contain) })
   }
   onQueryPathChanged: if (root.active && root.queryPath !== "") cwdReload.restart()
   onLeftRowsChanged: {
+    var lost = ""
     if (root._leftKey !== "" && root.leftKeyOf(root.leftRows[root.leftCursor]) !== root._leftKey) {
+      lost = root._leftKey
       for (var k = 0; k < root.leftRows.length; k++) {
         if (root.leftKeyOf(root.leftRows[k]) === root._leftKey) {
           root.leftCursor = k
+          lost = ""
           break
         }
+      }
+    }
+    // The row under the cursor is gone (its folder was closed or hidden): the nearest folder
+    // above it that is still listed takes the cursor and the place, so they never disagree.
+    if (lost.indexOf("dir:") === 0 && root.queryPath === "") {
+      var path = lost.slice(4)
+      var best = -1, bestLength = -1
+      for (var a = 0; a < root.leftRows.length; a++) {
+        var up = root.leftRows[a]
+        if (up.kind === "dir" && up.path !== "" && path.indexOf(up.path + "/") === 0 && up.path.length > bestLength) {
+          best = a
+          bestLength = up.path.length
+        }
+      }
+      if (best >= 0) {
+        root.selectLeft(best)
+        return
       }
     }
     root.applyReveal()
@@ -818,6 +914,14 @@ Item {
   }
 
   onRowsChanged: {
+    if (root._cursorTouched && root._rowKey !== "") {
+      for (var r = 0; r < root.rows.length; r++) {
+        if (root.rowKeyOf(root.rows[r]) === root._rowKey) {
+          root.cursor = r + 1
+          return
+        }
+      }
+    }
     if (root.cursor > root.rowCount - 1) root.cursor = root.rowCount - 1
     // The first answer lands after the sheet opened: start on the newest session.
     if (root.active && !root._cursorTouched && root.cursor === 0 && root.query === "" && root.rows.length > 0) root.cursor = 1
@@ -909,6 +1013,14 @@ Item {
         readonly property bool cursorHere: root.focusPane === "places" && root.leftCursor === lrow.index
         readonly property bool isPlace: lrow.index === root.placeRowIndex
         readonly property real indent: Style.space(14) * (lrow.info.kind === "dir" ? lrow.info.depth : 0)
+
+        // Hover moves the highlight, never the place on the right.
+        function hovered(x, y) {
+          if (!root.pointerMoved(lrow, x, y)) return
+          root.focusPane = "places"
+          root._reveal = ""
+          root.leftCursor = lrow.index
+        }
         readonly property var marks: lrow.info.kind === "place" && lrow.info.id === "workspace"
           ? root.marksFor(root.workspacePath)
           : (lrow.info.kind === "dir" || lrow.info.kind === "recent" ? root.marksFor(lrow.info.path) : [])
@@ -1117,11 +1229,8 @@ Item {
           visible: lrow.takes
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
-          onEntered: {
-            root.focusPane = "places"
-            root._reveal = ""
-            root.leftCursor = lrow.index
-          }
+          onEntered: lrow.hovered(mouseX, mouseY)
+          onPositionChanged: function (mouse) { lrow.hovered(mouse.x, mouse.y) }
           onClicked: function (mouse) {
             root.focusPane = "places"
             var r = lrow.info
@@ -1260,6 +1369,12 @@ Item {
         readonly property bool cursorHere: root.focusPane === "list" && root.cursor === row.index
         readonly property bool chosen: row.session !== null && root.initialSessionId !== "" && row.session.id === root.initialSessionId
         readonly property bool showFolder: row.session !== null && root.activeKind === "recent"
+
+        function hovered(x, y) {
+          if (!root.pointerMoved(row, x, y)) return
+          root.focusPane = "list"
+          root.setCursorByHand(row.index)
+        }
         width: list.width
         height: Style.space(34)
 
@@ -1380,11 +1495,8 @@ Item {
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
-          onEntered: {
-            root.focusPane = "list"
-            root._cursorTouched = true
-            root.cursor = row.index
-          }
+          onEntered: row.hovered(mouseX, mouseY)
+          onPositionChanged: function (mouse) { row.hovered(mouse.x, mouse.y) }
           onClicked: {
             root.focusPane = "list"
             root.cursor = row.index
@@ -1404,6 +1516,7 @@ Item {
           if (root.loading) return "Reading sessions…"
           if (root.activeKind === "home") return "Sessions started in ~ itself cannot be resumed here."
           if (root.activeKind !== "recent" && root.folderLoading) return "Reading the sessions of " + Model.shortPath(root.activePath, root.home) + "…"
+          if (root.folderFailed) return "This folder's sessions could not be read. Enter starts a new one."
           if (root.result === null) return "Sessions could not be read."
           if (root.activeKind === "recent") return "No sessions to resume here. Start a new one above."
           return "No sessions here in the last " + (typeof root.result.limitDays === "number" ? root.result.limitDays : 90)
