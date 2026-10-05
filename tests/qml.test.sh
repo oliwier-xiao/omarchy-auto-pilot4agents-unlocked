@@ -21,6 +21,14 @@ pass=0; fail=0
 ok() { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
 no() { printf '  FAIL %s\n         %s\n' "$1" "$2"; fail=$((fail + 1)); }
 
+# Like q1, q2, q4 and q5: every case below runs in the Qt 6 engine or under its linter, so on a
+# machine without them (a CI runner) the suite says so and skips, rather than failing every case
+# for a reason that is not the code's. An Omarchy machine has both, and runs it all.
+if [ ! -x "$QML" ] || [ ! -x "$QLINT" ]; then
+  echo "  skip the QML suite (no Qt 6 qml runtime and qmllint at $QML, $QLINT)"
+  exit 0
+fi
+
 T="$(mktemp -d "${TMPDIR:-/tmp}/ap4a-qml.XXXXXX")" || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
 mkdir -p "$T/lib" "$T/home"

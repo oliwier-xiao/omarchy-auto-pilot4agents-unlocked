@@ -48,6 +48,11 @@ Item {
   readonly property string usageError: root._usageError
   readonly property var agents: root._agents
   readonly property var sessions: root._sessions
+  // Folder path -> Dirs answer, for the session picker's folder tree (a failed read is stored
+  // as {ok: false, path, code, message}); cleared each time the picker opens.
+  readonly property var dirs: root._dirs
+  // The No project folder: {path, exists, refused}, null until the first workspace answer.
+  readonly property var workspace: root._workspace
   readonly property var settings: root._settings
   // harness -> Models answer (a failed read stores {ok: false, models: [], reason}).
   readonly property var models: root._models
@@ -59,6 +64,7 @@ Item {
   readonly property bool loadingUsage: (root._inflightVerbs["usage"] || 0) > 0
   readonly property bool loadingAgents: (root._inflightVerbs["agents"] || 0) > 0
   readonly property bool loadingSessions: (root._inflightVerbs["sessions"] || 0) > 0
+  readonly property bool loadingDirs: (root._inflightVerbs["dirs"] || 0) > 0
   readonly property bool loadingSettings: (root._inflightVerbs["settings-get"] || 0) > 0
   readonly property bool loadingModels: (root._inflightVerbs["models"] || 0) > 0
   readonly property bool loadingTimeline: (root._inflightVerbs["timeline"] || 0) > 0
@@ -139,6 +145,8 @@ Item {
   property string _usageError: ""
   property var _agents: ({})
   property var _sessions: ({})
+  property var _dirs: ({})
+  property var _workspace: null
   property var _settings: root._defaultSettings
   property var _models: ({})
   property var _timeline: ({})
@@ -261,6 +269,8 @@ Item {
     "settings-set": { ms: 9000,  cap: 16384,  stdin: true,  lane: "write", mutates: false },
     "copy-resume":  { ms: 8000,  cap: 16384,  stdin: false, lane: "write", mutates: false },
     "sessions":     { ms: 13000, cap: 921600, stdin: false, lane: "read",  mutates: false },
+    "dirs":         { ms: 8000,  cap: 262144, stdin: false, lane: "read",  mutates: false },
+    "workspace":    { ms: 8000,  cap: 65536,  stdin: false, lane: "write", mutates: false },
     "usage":        { ms: 8000,  cap: 131072, stdin: false, lane: "read",  mutates: false },
     "agents":       { ms: 35000, cap: 65536,  stdin: false, lane: "read",  mutates: false },
     "models":       { ms: 30000, cap: 262144, stdin: false, lane: "read",  mutates: false },
@@ -324,6 +334,51 @@ Item {
     root._request("sessions", args, null, function (res) {
       if (res.ok !== true) { root._noteReadError(res); return }
       root._sessions = root._with(root._sessions, key, res)
+    })
+  }
+
+  // The sessions recorded in one folder, for every agent (`sessions --in`), stored under
+  // "in"; the answer names its folder, so a picker can tell a late answer from the current one.
+  function loadFolderSessions(path) {
+    if (!root._validCwd(path)) return
+    root._request("sessions", ["--in", path], null, function (res) {
+      if (res.ok !== true) {
+        root._noteReadError(res)
+        res = { "ok": false, "in": path, "code": res.code, "message": res.message }
+      }
+      root._sessions = root._with(root._sessions, "in", res)
+    })
+  }
+
+  // One folder of the picker's tree; `hidden` asks for hidden folders too (otherwise the helper
+  // only counts them). The answer is stored under the path asked for and, when the helper
+  // resolved it elsewhere, under its real path too.
+  function loadDirs(path, hidden) {
+    if (!root._validCwd(path)) return
+    root._request("dirs", ["--path", path].concat(hidden === true ? ["--hidden"] : []), null, function (res) {
+      // A plain read that lands after a read with hidden names never replaces it: the picker
+      // filters hidden names itself, and asked for them because it shows them.
+      var held = root._dirs[path]
+      if (hidden !== true && held && held.ok === true && held.hidden === true) return
+      if (res.ok !== true) {
+        if (res.code === "superseded") return
+        root._dirs = root._with(root._dirs, path, { ok: false, path: path, code: res.code, message: res.message })
+        return
+      }
+      var next = root._with(root._dirs, path, res)
+      if (typeof res.path === "string" && res.path !== path) next[res.path] = res
+      root._dirs = next
+    })
+  }
+
+  function clearDirs() { root._dirs = ({}) }
+
+  // The No project folder; `create` makes it first. cb(res) gets the answer either way.
+  function loadWorkspace(create, cb) {
+    root._request("workspace", create === true ? ["--create"] : [], null, function (res) {
+      if (res.ok === true) root._workspace = { path: res.path, exists: res.exists === true, refused: res.refused === true }
+      else root._noteReadError(res)
+      if (typeof cb === "function") cb(res)
     })
   }
 

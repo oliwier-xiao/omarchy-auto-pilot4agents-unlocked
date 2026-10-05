@@ -34,7 +34,7 @@ REASON_SENTENCES = {
     "failed": "The agent exited with an error.",
     "cli_missing": "The agent command was not found.",
     "cli_untrusted": "The agent command failed a safety check.",
-    "cwd_refused": "The working folder is not allowed.",
+    "cwd_refused": "The working folder is not allowed: it has to exist, be yours, and be writable by you alone.",
     "weekly_exhausted": "The weekly limit is used up.",
     "window_later": "The 5-hour window ends later than expected.",
     "window_exhausted": "The new 5-hour window is already used up.",
@@ -43,7 +43,7 @@ REASON_SENTENCES = {
     "stale_auth": "The agent reports a limit while usage is low. Sign in again.",
     "kill_switch": "The kill switch file is present.",
     "plugin_disabled": edition.DISPLAY_NAME + " is not enabled in the bar.",
-    "plugin_identity": "The plugin folder does not match its manifest.",
+    "plugin_identity": "The plugin folder does not match its manifest, or its path holds a space or another character a systemd unit cannot carry.",
     "digest_mismatch": "The job changed since it was armed.",
     "late": "The computer was off or asleep past the grace time.",
     "session_busy": "The session stayed in use.",
@@ -78,9 +78,14 @@ _CAP = 4096
 
 
 def sanitize_label(label):
+    """The label as a notification body may carry it. Notification servers render a subset of
+    markup in the body (mako, Omarchy's, among them), so &, < and > are escaped, after truncation,
+    so a cut never lands inside an entity: a label is typed by somebody, or built from a folder
+    name, and neither is markup."""
     text = label if isinstance(label, str) else ""
     text = "".join(ch for ch in text if ch.isprintable()).replace('"', "'").strip()
-    return text[: consts.LABEL_MAX].rstrip() or "Job"
+    text = text[: consts.LABEL_MAX].rstrip() or "Job"
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _notify_setting():

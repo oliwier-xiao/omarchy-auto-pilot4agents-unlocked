@@ -195,15 +195,15 @@ PREVIEW_NEW_SESSION = "<new-session-id>"
 def _check_ids(job, harness, mode, sid, preview):
     grammar = _session_grammar(harness)
     if mode in ("resume", "fork"):
-        if not isinstance(sid, str) or not grammar.match(sid):
+        if not isinstance(sid, str) or not grammar.fullmatch(sid):
             raise ApError("invalid_session", field="target.sessionId")
     if mode == "fork" and not consts.CAN_FORK.get(harness, False):
         raise ApError("fork_unsupported", field="target.mode")
     if mode == "new" and harness in NEW_SESSION_HARNESSES and not (preview and sid is None):
-        if not isinstance(sid, str) or not consts.UUID_RE.match(sid):
+        if not isinstance(sid, str) or not consts.UUID_RE.fullmatch(sid):
             raise ApError("invalid_session", field="target.newSessionId")
     job_id = job.get("id")
-    if not (isinstance(job_id, str) and consts.JOB_ID_RE.match(job_id)) and not (preview and job_id is None):
+    if not (isinstance(job_id, str) and consts.JOB_ID_RE.fullmatch(job_id)) and not (preview and job_id is None):
         raise ApError("bad_input", field="id")
 
 
@@ -403,7 +403,7 @@ def resume_display(job):
     harness = job["harness"]
     state = job.get("state") or {}
     sid = state.get("runSessionId") or job["target"].get("sessionId")
-    if not isinstance(sid, str) or not _session_grammar(harness).match(sid):
+    if not isinstance(sid, str) or not _session_grammar(harness).fullmatch(sid):
         raise ApError("bad_status")
     cwd = job["target"].get("cwd")
     if _clean_abs(cwd) is None:

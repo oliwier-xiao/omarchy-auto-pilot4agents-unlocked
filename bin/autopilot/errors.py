@@ -27,7 +27,7 @@ MESSAGES = {
     "invalid_target": "The session choice is not valid.",
     "invalid_session": "The session id is not valid.",
     "session_not_found": "That session could not be found.",
-    "invalid_cwd": "That working folder is not allowed.",
+    "invalid_cwd": "That working folder is not allowed: it has to be yours and writable by you alone, and not your home, a system folder or the plugin's own.",
     "invalid_model": "The model name is not valid.",
     "invalid_label": "The label is not valid.",
     "invalid_limits": "The limits are out of range.",
@@ -51,7 +51,7 @@ MESSAGES = {
     "kill_switch": (edition.DISPLAY_NAME + " is switched off by its kill switch file. Delete ~/.config/omarchy/"
                     + edition.CONFIG_DIR_NAME + "/" + edition.KILL_SWITCH_NAME + " to switch it on."),
     "plugin_disabled": edition.DISPLAY_NAME + " is not enabled in the bar.",
-    "plugin_identity": "The plugin folder does not match its manifest.",
+    "plugin_identity": "The plugin folder does not match its manifest, or its path holds a space or another character a systemd unit cannot carry.",
     "systemd_failed": "The system scheduler refused the job.",
     "systemd_timeout": "The system scheduler did not answer in time.",
     "stop_unverified": "The job could not be confirmed as stopped.",

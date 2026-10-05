@@ -392,11 +392,11 @@ def open_runtime():
     return StateDir(value + "/" + edition.RUNTIME_DIR_NAME, fd, "runtime_dir")
 
 
-def read_file_nofollow(path, cap, *, owner_uid_or_root=False):
+def read_file_nofollow(path, cap, *, owner_uid_or_root=False, private=False):
     """Bounded read of a file this plugin does not own. None when absent.
 
-    Raises state_refused (symlink, not a regular file, foreign owner, unreadable) or
-    state_too_large.
+    Raises state_refused (symlink, not a regular file, foreign owner, unreadable, or with
+    private=True group- or world-writable) or state_too_large.
     """
     if not isinstance(path, str) or not os.path.isabs(path) or "\0" in path:
         raise ApError("state_refused")
@@ -410,6 +410,8 @@ def read_file_nofollow(path, cap, *, owner_uid_or_root=False):
         st = os.fstat(fd)
         owners = (_uid(), 0) if owner_uid_or_root else (_uid(),)
         if not stat.S_ISREG(st.st_mode) or st.st_uid not in owners:
+            raise ApError("state_refused")
+        if private and st.st_mode & 0o022:
             raise ApError("state_refused")
         if st.st_size > cap:
             raise ApError("state_too_large")
@@ -487,6 +489,17 @@ def plugin_code_trusted():
         for name in os.listdir(package):
             if name.endswith(".py"):
                 check_trusted_file(os.path.join(package, name), executable=False, check_ancestors=False)
+        # `python3 -B` writes no bytecode but still runs a .pyc it finds whose recorded size and
+        # mtime match the source, so a cache somebody else can write is code a timer would run.
+        cache = os.path.join(package, "__pycache__")
+        try:
+            cst = os.lstat(cache)
+        except FileNotFoundError:
+            return True
+        if not stat.S_ISDIR(cst.st_mode) or cst.st_uid not in (_uid(), 0) or cst.st_mode & 0o022:
+            return False
+        for name in os.listdir(cache):
+            check_trusted_file(os.path.join(cache, name), executable=False, check_ancestors=False)
     except (ApError, OSError):
         return False
     return True
@@ -547,12 +560,34 @@ def _lists_plugin(entries, plugin_id):
     return False
 
 
-def plugin_enabled_in_shell():
-    """True iff shell.json lists the plugin in bar.layout, bar.id or plugins[]; None if unreadable."""
+def _read_linked_shell_json(path):
+    """shell.json when it is a symlink, as a dotfiles manager (stow, yadm) leaves it: the file it
+    resolves to, opened the same guarded way and only when it is this user's and writable by nobody
+    else. Raises state_refused for anything that is not such a link."""
     try:
-        data = read_file_nofollow(home() + "/.config/omarchy/shell.json", consts.SHELL_JSON_MAX)
+        if not stat.S_ISLNK(os.lstat(path).st_mode):
+            raise ApError("state_refused")
+    except OSError:
+        raise ApError("state_refused") from None
+    return read_file_nofollow(os.path.realpath(path), consts.SHELL_JSON_MAX, private=True)
+
+
+def plugin_enabled_in_shell():
+    """True iff shell.json lists the plugin in bar.layout, bar.id or plugins[]; None if unreadable.
+
+    A symlinked shell.json used to read as unreadable, so a bar that listed the plugin was told it
+    was not enabled: arming was refused and armed jobs paused.
+    """
+    path = home() + "/.config/omarchy/shell.json"
+    try:
+        data = read_file_nofollow(path, consts.SHELL_JSON_MAX)
     except ApError:
-        return None
+        try:
+            data = _read_linked_shell_json(path)
+        except ApError:
+            return None
+        if data is None:
+            return None
     if data is None:
         return False
     try:

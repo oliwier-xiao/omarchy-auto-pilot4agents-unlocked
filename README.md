@@ -8,13 +8,19 @@ Each job runs headless in a transient systemd user timer, so it fires while the 
 
 | Install | Update | Remove |
 |---|---|---|
-| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked` — after [cancelling jobs](#removal) |
+| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked`, after [cancelling jobs](#removal) |
 
 ![Auto Pilot Unlocked panel on Compose](preview.png)
 
+| Install | Update | Remove |
+|---|---|---|
+| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents` | `omarchy plugin remove oliwier.auto-pilot4agents`, after [cancelling jobs](#removal) |
+
+![Auto Pilot panel on Compose](preview.png)
+
 ## What it does
 
-- **Compose.** Write a prompt, pick an agent, one of its sessions (resume it, fork it or start a new one) and a model, choose the permission level and the moment, and arm it. The moment can be now, in a few minutes or hours, a clock time up to 8 days ahead, or the next limit reset. **Allow paid usage** stays off unless you tick it.
+- **Compose.** Write a prompt, pick where it runs and how (an agent, a folder from the tree of your home folder, one of its sessions to resume or fork, a new session, or No project), a model, the permission level and the moment, and arm it. The moment can be now, in a few minutes or hours, a clock time up to 8 days ahead, or the next limit reset. **Allow paid usage** stays off unless you tick it.
 - **Limits.** The panel header shows how much of each usage limit is used and when it resets, read from the usage records already on your computer.
 - **Queue.** Armed jobs, grouped by day on a timeline with the limit resets marked. Move, swap, shift or disarm them.
 - **History.** How each run ended (done, failed, limit hit, skipped, missed), with the last lines of output and a ready-to-paste resume command. A day timeline shows that day's runs, resets and armed jobs.
@@ -25,6 +31,8 @@ Each job runs headless in a transient systemd user timer, so it fires while the 
 ![Queue](docs/queue.png)
 
 ![History](docs/history.png)
+
+![Where to run](docs/where.png)
 
 ## Install
 
@@ -43,7 +51,10 @@ omarchy restart shell
 The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
 
 Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps,
-jobs first — see [Removal](#removal).
+jobs first: see [Removal](#removal).
+
+Update with `omarchy plugin update oliwier.auto-pilot4agents`. Removal takes three steps, jobs
+first: see [Removal](#removal).
 
 ## Dependencies
 
@@ -82,11 +93,26 @@ Codex must be signed in with `codex login`, Cursor Agent with `cursor-agent logi
 
 1. Click the Auto Pilot icon in the bar. A right click opens the panel straight on Compose.
 2. Write the prompt.
-3. Press `Tab` to reach **Send to**, then `Enter` to open the session picker. Pick a session, or type a folder for a new one.
+3. Press `Tab` to reach **Send to**, then `Enter` to open **Where to run**. Pick a session, press `Tab` and pick a folder from the tree, or pick **No project** for work that needs no repository.
 4. Press `Tab` to reach **When** and pick the moment: `k` for 5 minutes later, `r` for the next reset, or type `1405` and press `Enter` for 14:05.
 5. Read the **Will run** line, then press `Ctrl+Enter` to arm.
 
 The job waits in the Queue (`Ctrl+2`), the bar counts down to it, and a notification tells you how it ended.
+
+## Where to run
+
+**Where to run** opens from **Send to**. It has two panes.
+
+- **Places and folders**, on the left:
+  - **No project** is `~/AutoPilot`, for a report, a summary or research that needs no repository. The agent starts there, and at a level that may edit files it keeps them there; at Plan it writes nothing and its answer is in History. The folder is made, private to you, when you first pick it for a new session, and its earlier sessions can be resumed like any other. Cursor Agent and Gemini CLI have to trust it once, as any folder, and Codex asks you to allow it because it is not a git repository.
+  - **All recent sessions** is every agent's newest sessions, across folders.
+  - **Recent folders** are the folders with the newest sessions.
+  - The folder tree starts at your home folder and never goes above it. A git checkout carries a git mark, and a folder with sessions carries each agent's mark and how many sessions it has there.
+- **Sessions**, on the right: what the chosen place holds, newest first. Row 0 starts a new session there. `Enter` resumes the highlighted session and `Ctrl+F` forks it. The session the draft already uses is marked.
+
+The right pane follows the folder the keyboard moves to, or the one you click. A chosen folder's own list is read for every agent, so it also shows sessions older than the newest 50 of All recent sessions. Typing filters the sessions; typing a folder path such as `~/code/api` opens the tree down to it.
+
+Your home folder itself is never a working folder. It can be browsed, and the sheet says so instead of offering a session there: pick a folder inside it, or No project. Hidden folders are not even read by name until `Ctrl+H`.
 
 ## Triggers
 
@@ -217,7 +243,7 @@ Cursor Agent runs in Plan or Full access. Pi runs in Plan, Auto or Full access.
 - **Provider and model.** Every Pi job needs both. Pick them in the model picker.
 - **Sign-in check.** `pi auth check` confirms the sign-in for that provider before arming and again before firing.
 - **Slash prompts.** A prompt that starts with `/` is refused, because Pi reads it as a command. Start it with a word.
-- **Sessions.** The session picker lists the Pi sessions of the chosen folder, and a job resumes or forks the session file by its full path.
+- **Sessions.** Where to run lists the Pi sessions of the chosen folder, and a job resumes or forks the session file by its full path.
 
 ## Keyboard
 
@@ -292,15 +318,18 @@ With the mouse, drop a job on another job to swap their times, or on a day to mo
 | `Ctrl+Enter` twice | run again |
 | `Ctrl+R` | refresh |
 
-### Session picker
+### Where to run
 
 | Key | Action |
 |---|---|
-| type | filter |
-| `Left/Right` | agent |
+| type | filter the sessions, or type a folder path |
+| `Tab` | move between the sessions and the folders |
 | `Up/Down` | choose |
-| `Enter` | pick |
+| `Left/Right` | agent, in the sessions; close or open a folder, in the folders |
+| `Enter` | resume the session, or start a new one on row 0; in the folders, go to its sessions |
+| `Ctrl+F` | fork the highlighted session |
 | `Ctrl+N` | new session in that folder |
+| `Ctrl+H` | show or hide hidden folders |
 
 ### Model picker
 
@@ -338,7 +367,7 @@ The methods are `open`, `close`, `toggle`, `compose`, `queue` and `history`. `sh
    - the job still matches what you confirmed
    - for reset jobs, the new limit window has really opened
    - the agent binary is still trusted
-   - the working folder is allowed
+   - the working folder is allowed, and it and its agent configuration are still writable by you alone
    - the paid usage rules, the sign-in (Codex, Pi) and Cursor's settings and folder trust
    - with paid usage off, the limit is not already used up
    - the session is not in use
@@ -459,16 +488,18 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - Arming is bound to a digest of the agent, the binary's path, the session, the level, the limits, the model, the Pi provider, the paid usage setting, the trigger kind and the prompt's hash. If any of them changes before the job fires, it does not run and asks you to check it.
 - Agent binaries come only from the fixed locations listed under [Dependencies](#dependencies), and version-manager shims are refused. Each binary must be a regular file owned by you or root that nobody else can write, in folders nobody else can write, and it is checked again right before it runs.
 - The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, and `OPENCODE_PERMISSION` for OpenCode. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin` and the three `PI_*` variables above. API keys, tokens and display variables are never passed on.
-- The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused.
-- A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot` and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
+- The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused. No project is `~/AutoPilot`, which passes the same check.
+- The working folder has to be yours and writable by you alone, and so does the agent configuration already in it: `.claude`, `.codex`, `.cursor`, `.gemini`, `.opencode`, `.pi`, `.mcp.json`, `opencode.json`, `opencode.jsonc`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and everything directly inside those folders must belong to you or root, with nobody else able to write to them. Whoever could change them would choose the hooks, allow rules, MCP servers and instructions a run loads while nobody is watching. This is checked when you arm a job and again when it fires.
+- A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot`, its bytecode cache and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
+- Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session (or Pi session file), the working folder, and a notification's title and text: the job's label, its agent and what happened. Never a prompt, a key or a token.
 - The system tools it calls (`systemd-run`, `systemctl`, `busctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
-- Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
+- Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. Besides its own state and runtime folders, the only folder it makes is `~/AutoPilot`, mode 0700, when you pick No project for a new session and nothing is there yet. Whatever is already at that path is used only when it is a folder of yours, not a link, that nobody else can write; anything else is left as it is and refused. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
 
 ### What it reads, and what it never opens
 
-Every read is size-capped, does not follow links and keeps only the fields listed.
+Every read is size-capped, does not follow links and keeps only the fields listed. The folder tree is the one place that resolves a link, only to tell whether it leads to a folder inside your home folder, and it never opens one.
 
-- **Read:** the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` or `~/.cursor` (its approval and network settings); `.claude/settings.json` in the git root of a Cursor job's folder (whether it has allow rules); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores the session picker lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only).
+- **Read:** the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` or `~/.cursor` (its approval and network settings); `.claude/settings.json` in the git root of a Cursor job's folder (whether it has allow rules); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores Where to run lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only); for the folder tree, the names of the subfolders of one folder of your home folder at a time (hidden ones only after `Ctrl+H`), whether each has a `.git` entry (looked at with lstat, never opened), and who owns the folder a link leads to when that folder is inside your home folder.
 - **Looked at, never opened:** `.cursor/cli.json` in a Cursor job's folder and its parents; `~/.cursor/projects/<folder>/.workspace-trusted`; Cursor chat folders and their `store.db-wal` times; `opencode.json`, `opencode.jsonc` and `.opencode/` in an OpenCode job's folder.
 - **Never opened:** `~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/models.json`, `~/.local/share/opencode/auth.json`, `~/.config/cursor/auth.json`, Cursor's `state.vscdb` and chat databases, and Gemini's sign-in files. No command that prints a key or a token is ever run.
 - **Checks it runs without a prompt**, with the agent's own environment and a time and size limit: `codex login status`, `pi auth check --provider <provider> --json --no-refresh`, `cursor-agent status` (only whether it is signed in is kept), and the model listings under [Models](#models).
@@ -483,7 +514,9 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 - Run logs are kept for the last 20 runs of a job and 500 overall.
 - State files are opened without following links, must be regular files owned by you with a single link, are size-capped before parsing, and are written through a private temporary file, `fsync` and rename.
 - The job store holds at most 200 jobs in 1 MiB. A new job is refused once the store is three quarters full, and the oldest finished jobs make way before an armed job could fail to change state.
-- The session picker lists at most 50 sessions per agent from the last 90 days. It reads only the first 40 records (64 KiB) of a Claude transcript and the first 30 records of the newest 50 Pi session files, opens the OpenCode and Codex databases read-only with a size ceiling and a 3 second deadline, and caps every string.
+- Where to run lists at most 50 sessions per agent from the last 90 days, for all recent sessions and for one folder alike. It reads only the first 40 records (64 KiB) of a Claude transcript and the first 30 records of the newest 50 Pi session files, opens the OpenCode and Codex databases read-only with a size ceiling and a 3 second deadline, and caps every string.
+- The folder tree reads one folder at a time, only inside your home folder, through a descriptor opened without following a link: at most 4000 entries within 2 seconds, and at most 400 subfolders answered, fewer when the answer would pass 256 KiB. A link is shown as a link, and opens at its target only when that is a folder inside your home folder. Names that are not printable text are left out and counted.
+- A folder's own session list gives every agent its own share of the time and bytes, reads only that folder's rows from the OpenCode and Codex databases, and reads only the Claude project folder named after it, never the transcripts of other projects.
 - A model list holds at most 1000 entries. Each listing is read with a 20 second deadline and an output cap of 256 KiB to 1 MiB, and kept for 6 hours.
 
 ## Limitations
@@ -497,7 +530,7 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 - **Pi.** Unattended is not offered, every job needs a provider and a model, and Pi reports a finished run even when the provider failed, so Auto Pilot judges the run by Pi's last answer rather than its exit code.
 - **Editing files with Claude.** An Unattended Claude job edits files only where your own Claude permission rules already allow it. Auto and Full access edit without asking.
 - **Auto and Full access are unverified live.** Their flags come from each agent's own `--help`. The helper and panel tests cover the commands they build, but no scheduled run at these levels has been watched end to end yet.
-- **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal.
+- **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal. Auto Pilot only makes sure nobody but you can change them; what they do is up to you.
 - **Resuming.** A job that resumes a session adds its turns to that session. Fork the session if you want the original left untouched.
 - **Budget.** `--max-budget-usd` is Claude's own estimate and is used only with paid usage on. The turn limit and the runtime limit are the hard caps.
 - **Reset triggers and limits.** They need the usage records other tools keep, except the two computed resets. Without a record, pick a time instead.
@@ -518,7 +551,7 @@ Every read is size-capped, does not follow links and keeps only the fields liste
    omarchy plugin remove oliwier.auto-pilot4agents-unlocked
    ```
 
-3. Optionally delete its data: `~/.local/state/omarchy/auto-pilot4agents-unlocked` (jobs, stored prompts, run logs, model lists and the limits history) and `~/.config/omarchy/auto-pilot4agents-unlocked`.
+3. Optionally delete its data (`~/AutoPilot` is yours and stays, with whatever No project sessions wrote there): `~/.local/state/omarchy/auto-pilot4agents-unlocked` (jobs, stored prompts, run logs, model lists and the limits history) and `~/.config/omarchy/auto-pilot4agents-unlocked`.
 
 A job can never fire into a removed or disabled plugin. If step 1 is skipped, a timer that fires afterwards finds the plugin gone or disabled, does not start the agent, and marks the job paused.
 

@@ -13,8 +13,8 @@ def const(name):
 
 def model_ok(value):
     """True for a model id of the v2 grammar (brackets allowed, at most MODEL_MAX characters)."""
-    return isinstance(value, str) and len(value) <= consts.MODEL_MAX and bool(consts.MODEL_RE.match(value))
+    return isinstance(value, str) and len(value) <= consts.MODEL_MAX and bool(consts.MODEL_RE.fullmatch(value))
 
 
 def pi_provider_ok(value):
-    return isinstance(value, str) and bool(consts.PI_PROVIDER_RE.match(value))
+    return isinstance(value, str) and bool(consts.PI_PROVIDER_RE.fullmatch(value))

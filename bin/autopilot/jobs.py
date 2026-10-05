@@ -31,6 +31,15 @@ _SESSION_PATH_MAX = 4096
 # whatever HOME itself sits under.
 REFUSED_CWD_PREFIXES = ("/tmp", "/run")
 
+# What an agent loads from its working folder by itself: project settings with hooks and allow
+# rules, MCP server lists, instruction files. A headless run loads them with nobody there to answer
+# a trust prompt, so each one present has to be as private as the folder (see check_cwd).
+AGENT_CONFIG_NAMES = (".claude", ".codex", ".cursor", ".gemini", ".opencode", ".pi",
+                      ".mcp.json", "opencode.json", "opencode.jsonc", "AGENTS.md", "CLAUDE.md", "GEMINI.md")
+# A configuration folder is checked one level down, and only this far: enough for settings.json
+# and its neighbours, and a bound on the work for a folder somebody has filled.
+_AGENT_CONFIG_ENTRIES_MAX = 256
+
 _TOP_DRAFT_KEYS = ("id", "label", "harness", "target", "level", "limits", "model", "trigger", "prompt",
                    "expectCommandDigest", "allowPaid", "provider")
 _TARGET_DRAFT_KEYS = ("mode", "sessionId", "cwd", "allowNonGit", "sessionPath")
@@ -310,7 +319,46 @@ def check_cwd(path):
         raise ApError("invalid_cwd", "target.cwd") from None
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
         raise ApError("invalid_cwd", "target.cwd")
+    # Writable by anyone but this user, the folder is theirs to fill: a job fires with nobody
+    # present, and the agent loads whatever hooks, allow rules, MCP servers and instructions it
+    # finds there. So the folder, and the agent configuration already in it, must be this user's
+    # alone. Checked when a job is created and again when it fires.
+    if st.st_mode & 0o022 or not _agent_config_private(real):
+        raise ApError("invalid_cwd", "target.cwd")
     return real
+
+
+def _private_entry(path):
+    """True when nobody but this user (or root) can change what is at path. A symlink is judged by
+    what it points at; a dangling one points at nothing an agent could load."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            st = os.stat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return st.st_uid in (os.getuid(), 0) and not st.st_mode & 0o022
+
+
+def _agent_config_private(folder):
+    """Every entry of AGENT_CONFIG_NAMES in folder, and the direct children of the folders among
+    them, owned by this user or root and not group- or world-writable."""
+    for name in AGENT_CONFIG_NAMES:
+        path = os.path.join(folder, name)
+        if not _private_entry(path):
+            return False
+        if not os.path.isdir(path):
+            continue
+        try:
+            with os.scandir(path) as entries:
+                for count, entry in enumerate(entries):
+                    if count >= _AGENT_CONFIG_ENTRIES_MAX or not _private_entry(entry.path):
+                        return False
+        except OSError:
+            return False
+    return True
 
 
 def default_label(harness_id, cwd):
@@ -638,7 +686,6 @@ def save_store(sd, store):
     data = _encode_store(store)
     evicted = []
     if len(data) > consts.JOBS_FILE_MAX:
-        now = store["updatedAt"]
         kept = list(store["jobs"])
         victims = sorted((j for j in kept if j["state"]["status"] not in ("armed", "running")
                           and not in_queue(j)), key=_job_ended_at)

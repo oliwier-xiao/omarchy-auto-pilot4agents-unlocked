@@ -50,7 +50,7 @@ class _Stop(Exception):
 
 
 def _diag(code, job_id, gen):
-    line = "ap4a: %s job=%s gen=%s\n" % (code, job_id if consts.JOB_ID_RE.match(job_id or "") else "-",
+    line = "ap4a: %s job=%s gen=%s\n" % (code, job_id if consts.JOB_ID_RE.fullmatch(job_id or "") else "-",
                                          gen if isinstance(gen, int) else "-")
     try:
         os.write(2, line.encode("ascii"))
@@ -64,7 +64,7 @@ def _parse_args(argv):
         args = args[1:]
     if len(args) != 4 or args[0] != "--job" or args[2] != "--gen":
         raise ApError("bad_args")
-    if not consts.JOB_ID_RE.match(args[1]) or not _GEN_RE.match(args[3]) or int(args[3]) < 1:
+    if not consts.JOB_ID_RE.fullmatch(args[1]) or not _GEN_RE.fullmatch(args[3]) or int(args[3]) < 1:
         raise ApError("bad_args")
     return args[1], int(args[3])
 
@@ -127,28 +127,32 @@ def _arm_after_save(sd, store, job, now):
 
 
 def _session_lock(job):
-    """(fd, held_elsewhere). fd is None when no lock applies or it could not be taken."""
+    """(fd, held_elsewhere). fd is None when no lock applies, or when one applies and could not be
+    taken, which is reported as held elsewhere.
+
+    A session that needs its lock and cannot get one waits like a locked one, rather than running
+    without it: with no runtime folder, two jobs on one session would both write it. A systemd user
+    service always has a runtime folder, so this is the corner it is for.
+    """
     sid = harness.write_session(job)
     if not sid:
         return None, False
     try:
         runtime = fsio.open_runtime()
     except ApError:
-        return None, False
+        return None, True
     digest = hashlib.sha256((job["harness"] + ":" + sid).encode("utf-8")).hexdigest()
-    try:
-        fd = os.open("session-" + digest + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
-                     dir_fd=runtime.fd)
-    except OSError:
-        return None, False
+    with runtime:
+        try:
+            fd = os.open("session-" + digest + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=runtime.fd)
+        except OSError:
+            return None, True
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None, True
     except OSError:
         os.close(fd)
-        return None, False
+        return None, True
     return fd, False
 
 
@@ -479,7 +483,7 @@ def _classify(job, state, run, now):
 def _run_session_id(job, result):
     sid = result.get("sessionId")
     grammar = consts.OPENCODE_ID_RE if job["harness"] == "opencode" else consts.UUID_RE
-    if isinstance(sid, str) and grammar.match(sid):
+    if isinstance(sid, str) and grammar.fullmatch(sid):
         return sid
     target = job["target"]
     if job["harness"] == "gemini" and target["mode"] == "new" and result["outcome"] not in (
