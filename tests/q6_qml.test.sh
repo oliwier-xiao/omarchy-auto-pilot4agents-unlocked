@@ -790,14 +790,16 @@ Item {
       check(C, sheet.newState === "missing", "the helper says /code/api is not there: " + sheet.newState)
       key(Qt.Key_U, Qt.ControlModifier, "")
       root.typeText("~/nothere")
+      root.mark = Date.now()
     }, function () { return sheet.suggesting })
     step(C, function (C) {
       check(C, sheet.suggestions.length === 0 && sheet.newState === "missing", "nothing close: " + JSON.stringify(sheet.suggestions))
+      check(C, root.calls("loadSessions").every(function (c) { return c.args[1] !== "/home/tester/nothere" }), "a folder that is not there is never read")
       key(Qt.Key_Home)
       key(Qt.Key_Return)
       check(C, root.picks.length === 0 && lastNotice().text === "~/nothere does not exist. Pick a folder of yours, or type its path.",
             "New session refuses a folder that is not there: " + lastNotice().text)
-    }, function () { return sheet.walk.exists === false })
+    }, function () { return sheet.walk.exists === false && root.since(700) })
 
     C = "a_folder_the_helper_refuses_is_said_before_a_pick"
     step(C, function (C) {

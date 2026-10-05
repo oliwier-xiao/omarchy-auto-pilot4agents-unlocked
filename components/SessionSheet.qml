@@ -1079,6 +1079,9 @@ Item {
   function reloadForPath() {
     var p = root.queryPath
     if (!root.active || p === "" || p === "/") return
+    // A folder that is not there holds no sessions: half-typed paths ("/m" on the way to /music)
+    // are never read.
+    if (root.walk.exists === false || root.newState === "missing") return
     root.reveal(p)
     root.readFolder(p)
     if (p === root._listedCwd) return
