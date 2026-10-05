@@ -411,7 +411,7 @@ Item {
                  "--no-approve", "--tools", "read,grep,find,ls", "--provider", String(draft.provider), "--model", m,
                  "--session-id", "<new-session-id>", "--name", "autopilot-<job>"]
       } else if (h === "cursor") {
-        parts = ["cursor-agent", "-p", "--output-format", "stream-json", "--mode", "ask", "--sandbox", "enabled", "--workspace", String(draft.target.cwd)]
+        parts = ["cursor-agent", "-p", "--output-format", "stream-json", "--mode", "ask"]
       } else {
         parts = [h, "run"].concat(m !== "" ? ["--model", m] : [])
       }
@@ -1137,7 +1137,7 @@ Item {
       var line = find(composeView, function (i) { return i.text === compose.gateLine && i.visible })
       check(C, line !== null && String(line.color) === String(theme.warnInk), "shown in the warning ink")
       check(C, armButton.enabled === false && saveButton.enabled === true, "Arm off, Save draft on")
-      check(C, compose.argvDisplay.indexOf("cursor-agent -p --output-format stream-json --mode ask --sandbox enabled --workspace") === 0, "Will run still shows the command")
+      check(C, compose.argvDisplay.indexOf("cursor-agent -p --output-format stream-json --mode ask") === 0, "Will run still shows the command")
       var arms = calls("createAndArm").length
       root.notices = []
       key(compose, Qt.Key_Return, Qt.ControlModifier, "")

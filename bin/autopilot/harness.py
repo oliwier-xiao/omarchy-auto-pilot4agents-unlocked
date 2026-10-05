@@ -6,6 +6,7 @@ never part of any argv or environment built here; every CLI reads it from stdin,
 supervisor closes after writing.
 """
 
+import glob
 import os
 import pwd
 import re
@@ -166,6 +167,23 @@ def pi_session_path_ok(path):
     return False
 
 
+def _pi_default_dir(cwd):
+    """The folder Pi files a working folder's sessions in (its getDefaultSessionDir)."""
+    relative = cwd[1:] if cwd.startswith("/") else cwd
+    return (fsio.home().rstrip("/") + "/" + consts.PI_SESSIONS_REL + "/--"
+            + re.sub(r"[/\\:]", "-", relative) + "--")
+
+
+def _pi_id_unique(session_id, path):
+    """True when path is the one session file in the store named after session_id."""
+    pattern = os.path.join(glob.escape(fsio.home()), consts.PI_SESSIONS_REL, "*", "*_" + session_id + ".jsonl")
+    try:
+        found = [os.path.realpath(p) for p in glob.glob(pattern)]
+    except OSError:
+        return False
+    return found == [os.path.realpath(path)]
+
+
 def write_session(job):
     """Session id a run writes into, or None when the CLI creates a fresh one (fork, new)."""
     mode, sid = effective_session(job)
@@ -228,6 +246,7 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
     if mode == "new" and sid is None:
         sid = PREVIEW_NEW_SESSION
     argv = list(exec_prefix)
+    pi_env = {}
 
     if harness == "claude":
         argv += ["-p", "--output-format", "stream-json", "--verbose"]
@@ -247,7 +266,10 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
         else:
             argv += ["--session-id", sid, "--name", edition.SESSION_NAME_PREFIX + id8]
     elif harness == "opencode":
-        argv += ["run", "--dir", cwd, "--format", "json"]
+        # No --dir: the agent is started in the working folder (cmd["cwd"]), which is what
+        # opencode, Codex and Cursor Agent use when no folder is named, and a folder named on
+        # the command line is readable by every account on the computer.
+        argv += ["run", "--format", "json"]
         slot = [len(argv), len(argv) + len(level_argv)]
         argv += level_argv
         if model:
@@ -259,7 +281,7 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
         else:
             argv += ["--title", edition.SESSION_NAME_PREFIX + id8]
     elif harness == "codex":
-        argv += ["exec", "-C", cwd]
+        argv += ["exec"]
         slot = [len(argv), len(argv) + len(level_argv)]
         argv += level_argv
         argv += ["--json", "--color", "never", "-o", run_dir + "/" + job["id"] + "-g" + gen_text + ".last.txt"]
@@ -289,7 +311,6 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
         argv += ["-p", "--output-format", "stream-json"]
         slot = [len(argv), len(argv) + len(level_argv)]
         argv += level_argv
-        argv += ["--workspace", cwd]
         if model:
             argv += ["--model", model]
         if mode == "resume":
@@ -307,16 +328,35 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
         if mode == "new":
             argv += ["--session-id", sid, "--name", edition.SESSION_NAME_PREFIX + id8]
         else:
-            # Only absolute in-store paths: a partial id can match another project's session, whose
-            # confirmation question would read the prompt from stdin.
             path = effective_session_path(job) if mode == "resume" else target.get("sessionPath")
             if not pi_session_path_ok(path):
                 raise ApError("invalid_session", field="target.sessionPath")
-            argv += ["--session", path] if mode == "resume" else ["--fork", path]
+            if not path.endswith("_" + sid + ".jsonl"):
+                raise ApError("invalid_session", field="target.sessionId")
+            # The session goes by its full id, and the folder Pi looks it up in goes in the
+            # environment. Its path would name the project: Pi files sessions in a folder named
+            # after the working folder, and a command line is readable by every account.
+            # An id Pi does not find in that folder is looked up in every project, and for
+            # --session a match there is a question read from stdin, which holds the prompt.
+            # So a resume points Pi at the folder its file is in. A fork's new file goes into
+            # the folder named, so that is the one Pi itself uses for the working folder (and
+            # the one classify derives from the header the run prints); the source is found
+            # there, or else by its id across the store, where --fork asks nothing.
+            if mode == "resume":
+                pi_dir = os.path.dirname(path)
+            else:
+                pi_dir = _pi_default_dir(os.path.realpath(cwd))
+                # Found in that folder unless the working folder is reached through a link; then
+                # Pi searches by id, which must name this one file.
+                if os.path.dirname(path) != pi_dir and not _pi_id_unique(sid, path):
+                    raise ApError("invalid_session", field="target.sessionId")
+            argv += ["--session", sid] if mode == "resume" else ["--fork", sid]
+            pi_env["PI_CODING_AGENT_SESSION_DIR"] = pi_dir
     else:
         raise ApError("invalid_harness", field="harness")
 
     env = agent_env(harness, job["level"])
+    env.update(pi_env)
     return {"argv": argv, "env": env, "cwd": cwd, "levelSlot": slot, "mode": mode}
 
 

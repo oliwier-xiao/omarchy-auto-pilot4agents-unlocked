@@ -87,8 +87,8 @@ _stand_in("systemd", _fill_systemd)
 _stand_in("reconcile", _fill_reconcile)
 
 from autopilot import (agents, bounded, classify, consts, edition, fsio, harness, identity, jobs,  # noqa: E402
-                       limits_history, liveness, notify, paid, reconcile, runner, sessions, supervise, systemd,
-                       trigger, windows)
+                       limits_history, liveness, notify, paid, reconcile, runner, sessionbus, sessions, supervise,
+                       systemd, trigger, windows)
 from autopilot.errors import ApError  # noqa: E402
 
 ORIGINAL_CANDIDATES = copy.deepcopy(consts.CLI_CANDIDATES)
@@ -165,7 +165,7 @@ class Sandbox(unittest.TestCase):
         self.p = Patch()
         self.p.set(consts, "XDG_RUNTIME_RE", re.compile("^" + re.escape(self.runtime) + "$"))
         missing = os.path.join(self.tmp, "no-such-tool")
-        for key in ("systemd_run", "systemctl", "busctl", "qs", "timedatectl"):
+        for key in ("systemd_run", "systemctl", "qs", "timedatectl"):
             self.p.item(consts.TOOLS, key, missing + "-" + key)
         self.p.set(consts, "TOOL_OWNER_UIDS", (0, os.getuid()))
         real_trust = fsio.check_trusted_file
@@ -334,13 +334,12 @@ def expected_argv(job, exec_prefix, run_dir, gen):
     s = run_sid or (t["sessionId"] if mode != "new" else t["newSessionId"])
     model = job["model"]
     if name == "cursor":
-        argv = exec_prefix + ["-p", "--output-format", "stream-json"] + lv + ["--workspace", t["cwd"]]
+        argv = exec_prefix + ["-p", "--output-format", "stream-json"] + lv
         argv += ["--model", model] if model else []
         argv += {"resume": ["--resume", s], "new": []}[mode]
     elif name == "pi":
         argv = exec_prefix + ["--mode", "json"] + lv + ["--provider", job["provider"], "--model", model]
-        path = job["state"]["runSessionPath"] or t["sessionPath"]
-        argv += {"resume": ["--session", path], "fork": ["--fork", t["sessionPath"]],
+        argv += {"resume": ["--session", s], "fork": ["--fork", t["sessionId"]],
                  "new": ["--session-id", t["newSessionId"], "--name", "autopilot-" + job["id"][:8]]}[mode]
     elif name == "claude":
         budget = ("%.2f" % job["limits"]["budgetUsd"]).rstrip("0").rstrip(".")
@@ -351,12 +350,12 @@ def expected_argv(job, exec_prefix, run_dir, gen):
         argv += {"resume": ["--resume", s], "fork": ["--resume", t["sessionId"], "--fork-session"],
                  "new": ["--session-id", t["newSessionId"], "--name", "autopilot-" + job["id"][:8]]}[mode]
     elif name == "opencode":
-        argv = exec_prefix + ["run", "--dir", t["cwd"], "--format", "json"] + lv
+        argv = exec_prefix + ["run", "--format", "json"] + lv
         argv += ["-m", model] if model else []
         argv += {"resume": ["-s", s], "fork": ["-s", t["sessionId"], "--fork"],
                  "new": ["--title", "autopilot-" + job["id"][:8]]}[mode]
     elif name == "codex":
-        argv = exec_prefix + ["exec", "-C", t["cwd"]] + lv + [
+        argv = exec_prefix + ["exec"] + lv + [
             "--json", "--color", "never", "-o", run_dir + "/" + job["id"] + "-g" + str(gen) + ".last.txt"]
         argv += ["--skip-git-repo-check"] if t["allowNonGit"] else []
         argv += ["-m", model] if model else []
@@ -383,7 +382,7 @@ class HarnessTests(Sandbox):
         literal = make_job("codex", level="unattended", mode="new", job_id="0123456789abcdef", allow_non_git=True,
                            model="gpt-5.5")
         cmd = harness.build_command(literal, exec_prefix=["/opt/codex"], run_dir="/s/runs", gen=2)
-        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "-C", "/home/u/proj", "-s", "workspace-write", "--json",
+        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "-s", "workspace-write", "--json",
                                        "--color", "never", "-o", "/s/runs/0123456789abcdef-g2.last.txt",
                                        "--skip-git-repo-check", "-m", "gpt-5.5", "-"])
         literal = make_job("gemini", level="unattended", mode="new", job_id="0123456789abcdef",
@@ -394,7 +393,7 @@ class HarnessTests(Sandbox):
         literal = make_job("opencode", level="plan", mode="fork", job_id="0123456789abcdef",
                            session="ses_abcdefgh12345678", model="anthropic/claude-opus-5")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/opencode"], run_dir="/s", gen=1)
-        self.assertEqual(cmd["argv"], ["/usr/bin/opencode", "run", "--dir", "/home/u/proj", "--format", "json",
+        self.assertEqual(cmd["argv"], ["/usr/bin/opencode", "run", "--format", "json",
                                        "--pure", "--agent", "plan", "-m", "anthropic/claude-opus-5",
                                        "-s", "ses_abcdefgh12345678", "--fork"])
 
@@ -501,9 +500,13 @@ class HarnessTests(Sandbox):
         gem = make_job("gemini", mode="new")
         cmd = harness.build_command(gem, exec_prefix=["/usr/bin/node", "/b/gemini.js"], run_dir="/s", gen=1)
         self.assertTrue(harness.display_argv("gemini", cmd["argv"], 2).startswith('gemini -p "" -o json'))
-        oc = make_job("opencode", mode="new", cwd="/home/u/my proj")
-        cmd = harness.build_command(oc, exec_prefix=["/usr/bin/opencode"], run_dir="/s", gen=1)
-        self.assertIn("--dir '/home/u/my proj'", harness.display_argv("opencode", cmd["argv"], 1))
+        # The working folder is where the agent starts, never an argument: a command line is
+        # readable by every account on the computer.
+        for name in ("opencode", "codex", "cursor", "claude", "gemini"):
+            other = make_job(name, mode="new", cwd="/home/u/my proj")
+            cmd = harness.build_command(other, exec_prefix=["/x"], run_dir="/s", gen=1)
+            self.assertEqual(cmd["cwd"], "/home/u/my proj")
+            self.assertFalse([a for a in cmd["argv"] if "my proj" in a], cmd["argv"])
         job["state"]["runSessionId"] = "3f2a0c19-0000-4000-8000-000000000001"
         self.assertEqual(harness.resume_display(job),
                          "cd '/home/u/my proj' && claude --resume 3f2a0c19-0000-4000-8000-000000000001")
@@ -1281,24 +1284,30 @@ class TriggerTests(TriggerBase):
 
 class NotifyTests(Sandbox):
 
-    def test_notify_argv_no_prompt(self):
-        calls = []
+    def test_notify_text_goes_over_the_bus_not_a_command_line(self):
+        calls, sent = [], []
         self.p.set(bounded, "run_bounded", lambda argv, **kw: calls.append((argv, kw)) or {"rc": 0, "timedOut": False})
+        self.p.set(sessionbus, "notify", lambda app, summary, body, timeout_ms, deadline_s=5.0:
+                   sent.append((app, summary, body, timeout_ms, deadline_s)) is None)
         job = make_job("claude")
         job["label"] = 'Fix "the" bug\x07 in a label that is far too long to be shown whole'
         self.assertTrue(notify.send("done", job, now=1789400000, duration_s=840))
-        argv, kw = calls[-1]
-        self.assertEqual(argv[:9], [consts.TOOLS["busctl"], "--user", "call", "org.freedesktop.Notifications",
-                                    "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "Notify",
-                                    "susssasa{sv}i", edition.NOTIFY_APP_NAME])
-        self.assertEqual(argv[9:11], ["0", ""])
-        self.assertEqual(argv[11], "Done")
-        self.assertEqual(argv[12], "\"Fix 'the' bug in a label that is far too\" finished in 14m.")
-        self.assertEqual(argv[13:], ["0", "0", "6000"])
-        self.assertEqual(kw["deadline_s"], 5.0)
+        self.assertEqual(calls, [], "a notification starts no program")
+        self.assertEqual(sent[-1], (edition.NOTIFY_APP_NAME, "Done",
+                                    "\"Fix 'the' bug in a label that is far too\" finished in 14m.", 6000, 5.0))
         notify.send("failed", job, now=1789400000, reason="boundary_mismatch", cli_changed=True)
-        self.assertTrue(calls[-1][0][12].endswith("The agent did not start in the requested permission level. "
-                                                  "The Claude Code command changed since the job was armed."))
+        self.assertTrue(sent[-1][2].endswith("The agent did not start in the requested permission level. "
+                                             "The Claude Code command changed since the job was armed."))
+        self.p.set(sessionbus, "notify", lambda *a, **kw: False)
+        self.assertFalse(notify.send("done", job, now=1789400000, duration_s=840))
+        self.p.set(sessionbus, "notify", lambda *a, **kw: sent.append(a) or True)
+        bounded.set_budget(0.0)
+        try:
+            count = len(sent)
+            self.assertFalse(notify.send("done", job, now=1789400000, duration_s=840), "no budget, no attempt")
+            self.assertEqual(len(sent), count)
+        finally:
+            bounded.set_budget(None)
         for event in notify.TEMPLATES:
             summary, body = notify.render(event, job, now=1789400000, fire_at=1789400600, duration_s=5,
                                           reason="late")
@@ -1314,10 +1323,10 @@ class NotifyTests(Sandbox):
         self.assertEqual(calls[-1][0], [consts.TOOLS["qs"], "ipc", "-p", consts.OMARCHY_SHELL_DIR, "call",
                                         edition.SERVICE_IPC_TARGET, "changed"])
         self.p.set(notify, "_notify_setting", lambda: "failures")
-        count = len(calls)
+        count = len(sent)
         self.assertFalse(notify.send("done", job, now=1789400000, duration_s=1))
         self.assertTrue(notify.send("failed", job, now=1789400000, reason="auth"))
-        self.assertEqual(len(calls), count + 1)
+        self.assertEqual(len(sent), count + 1)
         self.p.set(notify, "_notify_setting", lambda: "never")
         self.assertFalse(notify.send("failed", job, now=1789400000, reason="auth"))
 
@@ -1339,7 +1348,10 @@ class RunVerbBase(Sandbox):
             (job_id, gen, fire_at, runtime_sec)))
         self.p.set(reconcile, "reconcile", lambda sd, now=None: self.reconciled.append(True) or {})
         real_bounded = bounded.run_bounded
-        tools = (consts.TOOLS["busctl"], consts.TOOLS["qs"])
+        tools = (consts.TOOLS["qs"],)
+        # A notification goes over the bus socket; recorded as ["notify", summary, body].
+        self.p.set(sessionbus, "notify", lambda app, summary, body, timeout_ms, deadline_s=5.0:
+                   self.notified.append(["notify", summary, body]) is None)
 
         def recorder(argv, **kw):
             if argv and argv[0] in tools:
@@ -1443,7 +1455,7 @@ class RunVerbTests(RunVerbBase):
                 with open(os.path.join(root, name), "rb") as handle:
                     self.assertNotIn(canary.encode(), handle.read(), name)
         self.assertNotIn(canary, json.dumps([entry["argv"], entry["env"], self.notified, self.stderr_lines]))
-        self.assertEqual(self.notified[0][11:13], ["Done", self.notified[0][12]])
+        self.assertEqual(self.notified[0][:2], ["notify", "Done"])
         self.assertIn("changed", self.notified[-1])
         record = self.run_record(job["id"], 1)
         self.assertEqual((record["outcome"], record["action"]["status"], record["mode"]), ("done", "done", "new"))
@@ -1463,7 +1475,7 @@ class RunVerbTests(RunVerbBase):
         self.assertEqual(self.armed, [(job["id"], 2, resets + 120, 5400)])
         self.assertTrue(after["promptAvailable"])
         self.assertEqual(after["state"]["runSessionId"], job["target"]["newSessionId"])
-        self.assertEqual(self.notified[0][11], "Limit hit")
+        self.assertEqual(self.notified[0][1], "Limit hit")
         cmd = harness.build_command(after, exec_prefix=["/x"], run_dir="/s", gen=2)
         self.assertIn("--resume", cmd["argv"])
 
@@ -1474,7 +1486,7 @@ class RunVerbTests(RunVerbBase):
         self.assertEqual(self.run_verb(job["id"]), ["NEEDS_CONFIRM"])
         self.assertEqual(self.stored(job["id"])["state"]["status"], "needs_confirm")
         self.assertEqual(self.agent_entries(), [])
-        self.assertEqual(self.notified[0][11], "Check the job")
+        self.assertEqual(self.notified[0][1], "Check the job")
 
     def test_prompt_file_swap_no_fire(self):
         self.fake_config(mode="done")
@@ -1511,7 +1523,7 @@ class RunVerbTests(RunVerbBase):
         self.assertEqual(self.run_verb(job["id"]), ["PAUSED"])
         self.assertEqual(self.stored(job["id"])["state"]["reason"], "plugin_identity")
         self.assertEqual(self.agent_entries(), [])
-        self.assertEqual([n[11] for n in self.notified if n[0] == consts.TOOLS["busctl"]], ["Paused"] * 4)
+        self.assertEqual([n[1] for n in self.notified if n[0] == "notify"], ["Paused"] * 4)
 
     def test_a_folder_others_can_write_by_the_time_it_fires_stops_the_run(self):
         # Checked again at fire time, not only when the job was made: a folder can be opened up
@@ -1584,7 +1596,7 @@ class RunVerbTests(RunVerbBase):
         self.assertEqual(len(self.armed), 1)
         self.assertTrue(before + consts.SESSION_LOCK_DEFER_S <= self.armed[0][2] <= before + 310)
         self.assertEqual(self.agent_entries(), [])
-        self.assertEqual(self.notified[0][11], "Session busy")
+        self.assertEqual(self.notified[0][1], "Session busy")
 
     def test_retry_sends_continuation(self):
         self.fake_config(mode="done")
@@ -1618,7 +1630,7 @@ class RunVerbTests(RunVerbBase):
                          ("armed", "deferred", 2, 1, "window_later"))
         self.assertEqual(state["basis"]["resetEpoch"], later)
         self.assertEqual(self.armed, [(job["id"], 2, later + 120, 5400)])
-        self.assertEqual(self.notified[0][11], "Deferred")
+        self.assertEqual(self.notified[0][1], "Deferred")
         self.assertEqual(self.agent_entries(), [])
         self.assertTrue(after["promptAvailable"])
 
@@ -1645,7 +1657,7 @@ class RunVerbTests(RunVerbBase):
         record = self.run_record(job["id"], 1)
         self.assertEqual(record["cli"], {"exec": new_real, "changed": True,
                                          "from": os.path.join(versions, "1.0.0", "claude"), "to": new_real})
-        self.assertTrue(self.notified[0][12].endswith("The Claude Code command changed since the job was armed."))
+        self.assertTrue(self.notified[0][2].endswith("The Claude Code command changed since the job was armed."))
         self.assertEqual(self.stored(job["id"])["cli"]["real"], new_real)
 
     def test_cli_missing_final(self):
@@ -1665,7 +1677,7 @@ class RunVerbTests(RunVerbBase):
         after = self.stored(job["id"])
         self.assertEqual((after["state"]["status"], after["state"]["reason"]), ("missed", "late"))
         self.assertTrue(after["promptAvailable"])
-        self.assertEqual(self.notified[0][11], "Missed")
+        self.assertEqual(self.notified[0][1], "Missed")
 
     def test_other_harnesses_end_to_end(self):
         for name, mode, outcome, status in (("codex", "done", "DONE", "done"),
@@ -1732,7 +1744,7 @@ class V2HarnessTests(Sandbox):
                           model="claude-opus-4-8[context=1m,effort=high]")
         cmd = harness.build_command(cursor, exec_prefix=["/opt/cursor-agent/cursor-agent"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/opt/cursor-agent/cursor-agent", "-p", "--output-format", "stream-json",
-                                       "--mode", "ask", "--workspace", "/home/u/proj",
+                                       "--mode", "ask",
                                        "--model", "claude-opus-4-8[context=1m,effort=high]"])
         self.assertEqual((cmd["levelSlot"], cmd["cwd"]), ([4, 6], "/home/u/proj"))
         resume = make_job("cursor", mode="resume", session=CURSOR_UUID)
@@ -1752,12 +1764,18 @@ class V2HarnessTests(Sandbox):
         path = pi_path(PI_UUID)
         for mode, flag in (("resume", "--session"), ("fork", "--fork")):
             job = make_job("pi", mode=mode, session=PI_UUID, session_path=path)
-            self.assertEqual(harness.build_command(job, exec_prefix=["/p"], run_dir="/s", gen=1)["argv"][-2:],
-                             [flag, path])
+            built = harness.build_command(job, exec_prefix=["/p"], run_dir="/s", gen=1)
+            # By id, with the folder Pi looks it up in passed privately: the path names the project.
+            self.assertEqual(built["argv"][-2:], [flag, PI_UUID])
+            self.assertEqual(built["env"]["PI_CODING_AGENT_SESSION_DIR"], os.path.dirname(path))
         run_sid = "0f0e0d0c-0b0a-4908-8706-050403020100"
         retry = make_job("pi", mode="fork", session=PI_UUID, session_path=path, run_sid=run_sid)
-        self.assertEqual(harness.build_command(retry, exec_prefix=["/p"], run_dir="/s", gen=2)["argv"][-2:],
-                         ["--session", pi_path(run_sid)])
+        built = harness.build_command(retry, exec_prefix=["/p"], run_dir="/s", gen=2)
+        self.assertEqual(built["argv"][-2:], ["--session", run_sid])
+        self.assertEqual(built["env"]["PI_CODING_AGENT_SESSION_DIR"], os.path.dirname(pi_path(run_sid)))
+        mismatched = make_job("pi", mode="resume", session=PI_UUID, session_path=pi_path(run_sid))
+        with self.assertRaises(ApError):
+            harness.build_command(mismatched, exec_prefix=["/p"], run_dir="/s", gen=1)
         self.assertEqual(harness.effective_session_path(retry), pi_path(run_sid))
         self.assertIsNone(harness.effective_session_path(make_job("claude")))
 
@@ -1792,11 +1810,32 @@ class V2HarnessTests(Sandbox):
             refused(make_job("pi", mode="resume", session=PI_UUID, session_path=bad), "invalid_session",
                     "target.sessionPath")
 
+    def test_pi_fork_found_by_id_needs_one_file_even_under_a_home_with_glob_characters(self):
+        # The working folder is reached through a link, so the source is not in the folder Pi uses
+        # for it and Pi finds it by id across the store: that id must name this one file.
+        home = os.path.join(self.tmp, "home[1]")
+        os.makedirs(home, mode=0o700)
+        os.environ["HOME"] = home
+        path = pi_path(PI_UUID, home=home, folder="--elsewhere--")
+        os.makedirs(os.path.dirname(path), mode=0o700)
+        open(path, "w").close()
+        job = make_job("pi", mode="fork", session=PI_UUID, session_path=path)
+        built = harness.build_command(job, exec_prefix=["/p"], run_dir="/s", gen=1)
+        self.assertEqual(built["argv"][-2:], ["--fork", PI_UUID])
+        self.assertEqual(built["env"]["PI_CODING_AGENT_SESSION_DIR"],
+                         home + "/.pi/agent/sessions/--home-u-proj--")
+        twin = pi_path(PI_UUID, home=home, folder="--other--")
+        os.makedirs(os.path.dirname(twin), mode=0o700)
+        open(twin, "w").close()
+        with self.assertRaises(ApError) as ctx:
+            harness.build_command(job, exec_prefix=["/p"], run_dir="/s", gen=1)
+        self.assertEqual((ctx.exception.code, ctx.exception.field), ("invalid_session", "target.sessionId"))
+
     def test_cursor_argv_forbidden_flags_absent(self):
         forbidden = {"-f", joined("--fo", "rce"), joined("--yo", "lo"), joined("--tru", "st"),
                      joined("--auto-", "review"), joined("--approve-", "mcps"), "--api-key", "--auth-token",
                      "--continue", "--list-models", "--print"}
-        with_value = {"--output-format", "--mode", "--sandbox", "--workspace", "--model", "--resume"}
+        with_value = {"--output-format", "--mode", "--sandbox", "--model", "--resume"}
         for mode in ("new", "resume"):
             for model in (None, "gpt-5.5", "claude-opus-4-8[context=1m]"):
                 job = make_job("cursor", mode=mode, model=model)
@@ -1807,15 +1846,14 @@ class V2HarnessTests(Sandbox):
                 # Cursor's sandbox cannot start inside the job's unit, so the flag is never passed.
                 self.assertNotIn("--sandbox", values)
                 self.assertEqual(values["--output-format"], ["stream-json"])
-                self.assertEqual(values["--workspace"], [job["target"]["cwd"]])
+                self.assertNotIn("--workspace", argv, "the folder is where it starts, not an argument")
                 self.assertNotIn("auto", values.get("--model", []))
                 for sid in values.get("--resume", []):
                     self.assertRegex(sid, consts.UUID_RE)
                 self.assertEqual("--resume" in values, mode == "resume")
         preview = harness.display_argv("cursor", harness.build_command(
             make_job("cursor", mode="new"), exec_prefix=["/opt/cursor"], run_dir="/s", gen=1)["argv"], 1)
-        self.assertEqual(preview, "cursor-agent -p --output-format stream-json --mode ask "
-                                  "--workspace /home/u/proj <stdin>")
+        self.assertEqual(preview, "cursor-agent -p --output-format stream-json --mode ask <stdin>")
 
     def test_pi_argv_forbidden_flags_absent(self):
         forbidden = {"-p", "-a", joined("--appr", "ove"), "-e", "--extension", "--skill", "--prompt-template",
@@ -1837,9 +1875,16 @@ class V2HarnessTests(Sandbox):
             self.assertTrue(set(values["--tools"][0].split(",")) <= set(consts.PI_TOOLS), values["--tools"])
             self.assertEqual(values["--provider"], [job["provider"]])
             self.assertEqual(len([k for k in ("--session-id", "--session", "--fork") if k in values]), 1)
+            env = harness.build_command(job, exec_prefix=["/opt/pi"], run_dir="/s", gen=1)["env"]
             for key in ("--session", "--fork"):
                 for value in values.get(key, []):
-                    self.assertTrue(harness.pi_session_path_ok(value), value)
+                    # An id, never the session file: its folder is named after the project.
+                    self.assertRegex(value, consts.UUID_RE)
+                    self.assertNotIn("/", value)
+                    folder = env["PI_CODING_AGENT_SESSION_DIR"]
+                    self.assertTrue(harness.pi_session_path_ok(folder + "/x_" + value + ".jsonl"), folder)
+            if "--session-id" in values:
+                self.assertNotIn("PI_CODING_AGENT_SESSION_DIR", env)
 
     def test_agent_env_cursor_pi_allowlist(self):
         os.environ.update({"CURSOR_API_KEY": "k", "CURSOR_AUTH_TOKEN": "t", "CURSOR_API_ENDPOINT": "https://x",
@@ -2519,7 +2564,7 @@ class V2RunVerbTests(RunVerbBase):
         call = self.gate_calls[-1]
         self.assertEqual((call["phase"], call["deadline_s"], call["exec_prefix"], call["harness"]),
                          ("prefire", 30, [job["cli"]["real"]], "codex"))
-        self.assertEqual(self.notified[0][11], "Deferred")
+        self.assertEqual(self.notified[0][1], "Deferred")
         job = self.seed(name="claude", kind="now")
         self.gate_over = {"defer": {"action": "skip", "fireAt": None, "reason": "paid_exhausted", "resetEpoch": None}}
         self.assertEqual(self.run_verb(job["id"]), ["SKIPPED"])
@@ -2605,7 +2650,9 @@ class V2RunVerbTests(RunVerbBase):
         self.assertTrue(os.path.isfile(state["runSessionPath"]))
         self.assertEqual(self.run_record(job["id"], 1)["sessionPath"], state["runSessionPath"])
         argv = harness.build_command(after, exec_prefix=["/p"], run_dir="/s", gen=2)["argv"]
-        self.assertEqual(argv[-2:], ["--session", state["runSessionPath"]])
+        built = harness.build_command(after, exec_prefix=["/p"], run_dir="/s", gen=2)
+        self.assertEqual(argv[-2:], ["--session", state["runSessionId"]])
+        self.assertEqual(built["env"]["PI_CODING_AGENT_SESSION_DIR"], os.path.dirname(state["runSessionPath"]))
         entry = [e for e in self.agent_entries() if e["stdinBytes"]][-1]
         self.assertEqual(entry["argv"][entry["argv"].index("--session-id") + 1], job["target"]["newSessionId"])
 

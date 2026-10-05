@@ -90,7 +90,13 @@ def _epoch_ok(value):
 
 
 def _check_sessions(argv):
-    """sessions [--harness <h>] [--cwd <abs> | --in <abs>]: each flag at most once, --harness first."""
+    """sessions [--harness <h>] [--cwd <abs> | --in <abs> | --stdin]: each flag at most once,
+    --harness first.
+
+    --stdin reads the folder as {"cwd": <abs>} or {"in": <abs>} from stdin, which is how the panel
+    asks: a folder on a command line is readable by every account on the computer. --cwd and --in
+    are for a terminal.
+    """
     rest = list(argv)
     if rest[:1] == ["--harness"]:
         _need(len(rest) >= 2 and rest[1] in consts.HARNESSES)
@@ -98,6 +104,8 @@ def _check_sessions(argv):
     if rest[:1] in (["--cwd"], ["--in"]):
         _need(len(rest) >= 2 and _cwd_ok(rest[1]))
         rest = rest[2:]
+    elif rest[:1] == ["--stdin"]:
+        rest = rest[1:]
     _need(not rest)
 
 
@@ -127,7 +135,9 @@ def check_argv(verb, argv):
     elif verb == "sessions":
         _check_sessions(argv)
     elif verb == "dirs":
-        _need(count in (2, 3) and argv[0] == "--path" and _cwd_ok(argv[1]) and argv[2:] in ([], ["--hidden"]))
+        # --stdin takes the folder as {"path": <abs>} from stdin, the panel's form; --path is a terminal's.
+        _need((count in (2, 3) and argv[0] == "--path" and _cwd_ok(argv[1]) and argv[2:] in ([], ["--hidden"]))
+              or argv in (["--stdin"], ["--hidden", "--stdin"]))
     elif verb == "workspace":
         _need(count == 0 or argv == ["--create"])
     elif verb == "models":
@@ -197,6 +207,8 @@ def main(args):
         return _run_runner(argv)
 
     module_name, handler_name, reads_stdin = VERBS[verb]
+    if verb in ("sessions", "dirs") and argv[-1:] == ["--stdin"]:
+        reads_stdin = True
     cap = consts.OUTPUT_CAP.get(verb, consts.OUTPUT_CAP_DEFAULT)
     deadline = float(consts.VERB_DEADLINE_S[verb])
     previous = signal.signal(signal.SIGALRM, _on_alarm)

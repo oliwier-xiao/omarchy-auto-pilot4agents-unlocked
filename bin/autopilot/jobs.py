@@ -364,8 +364,8 @@ def _agent_config_private(folder):
 def default_label(harness_id, cwd):
     """The label of a job the user did not name, built from job metadata only.
 
-    Never from the prompt: a label reaches the notification body, and with it busctl's argv and
-    the toast, where prompt text must never appear (R0 D9, D17).
+    Never from the prompt: a label reaches the notification body and the toast, where prompt
+    text must never appear (R0 D9, D17).
     """
     name = consts.HARNESS_NAMES.get(harness_id, "Agent")
     base = os.path.basename(str(cwd or "").rstrip("/"))

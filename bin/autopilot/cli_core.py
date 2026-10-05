@@ -155,7 +155,7 @@ def _build_job(draft, *, job_id, found, cwd, title, now, prefs, prompt_sha, prom
                     and existing["harness"] == harness_id and old.get("mode") == "new" and old.get("newSessionId"))
         new_sid = old["newSessionId"] if reusable else str(uuid.uuid4())
     # A label the user typed is kept; a generated one follows the agent and folder. The prompt
-    # never supplies a label (it would reach the notification and busctl's argv).
+    # never supplies a label (it would reach the notification and the job list).
     if draft["label"]:
         label = draft["label"]
     elif existing is not None and existing["label"] != jobs.default_label(existing["harness"],

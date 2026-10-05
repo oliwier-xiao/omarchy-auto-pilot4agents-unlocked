@@ -243,7 +243,7 @@ Cursor Agent runs in Plan or Full access. Pi runs in Plan, Auto or Full access.
 - **Provider and model.** Every Pi job needs both. Pick them in the model picker.
 - **Sign-in check.** `pi auth check` confirms the sign-in for that provider before arming and again before firing.
 - **Slash prompts.** A prompt that starts with `/` is refused, because Pi reads it as a command. Start it with a word.
-- **Sessions.** Where to run lists the Pi sessions of the chosen folder, and a job resumes or forks the session file by its full path.
+- **Sessions.** Where to run lists the Pi sessions of the chosen folder. A job resumes or forks one by its full id, with the folder that holds its file in `PI_CODING_AGENT_SESSION_DIR`.
 
 ## Keyboard
 
@@ -388,13 +388,13 @@ claude -p --output-format stream-json --verbose <level> --max-turns <n> [--max-b
        new:    --session-id <new uuid> --name autopilot-<job id prefix>
        <stdin>
 
-opencode run --dir <folder> --format json <level> [-m <model>]
+opencode run --format json <level> [-m <model>]
        resume: -s <session id>
        fork:   -s <session id> --fork
        new:    --title autopilot-<job id prefix>
        <stdin>
 
-codex exec -C <folder> <level> --json --color never -o <runs folder>/<job id>-g<n>.last.txt [--skip-git-repo-check] [-m <model>]
+codex exec <level> --json --color never -o <runs folder>/<job id>-g<n>.last.txt [--skip-git-repo-check] [-m <model>]
        resume: resume <session id> -
        fork:   fork <session id> -
        new:    -
@@ -405,17 +405,19 @@ codex exec -C <folder> <level> --json --color never -o <runs folder>/<job id>-g<
        new:    --session-id <new uuid>
        <stdin>
 
-cursor-agent -p --output-format stream-json <level> --workspace <folder> [--model <model>]
+cursor-agent -p --output-format stream-json <level> [--model <model>]
        resume: --resume <chat id>
        new:    nothing more
        <stdin>
 
 pi --mode json <level> --provider <provider> --model <model>
-       resume: --session <session file>
-       fork:   --fork <session file>
+       resume: --session <session id>
+       fork:   --fork <session id>
        new:    --session-id <new uuid> --name autopilot-<job id prefix>
        <stdin>
 ```
+
+Every agent starts in the job's working folder, and the folder is never one of its arguments. To resume or fork a Pi session, Pi is told the folder that holds the session file in its environment (`PI_CODING_AGENT_SESSION_DIR`), and the session by its id: the file's path names the project.
 
 `--max-budget-usd` is passed only when **Allow paid usage** is on. `--skip-git-repo-check` is added only after you confirm a Codex job in a folder that is not a git repository. The turn and budget limits exist only for Claude. Every agent is also bound by the job's runtime limit. Cursor Agent and Pi get no prompt word at all: both read the prompt from standard input until it ends.
 
@@ -487,12 +489,12 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - Before arming, the panel shows the exact command, the working folder, the binary, what the level means and what paid usage allows.
 - Arming is bound to a digest of the agent, the binary's path, the session, the level, the limits, the model, the Pi provider, the paid usage setting, the trigger kind and the prompt's hash. If any of them changes before the job fires, it does not run and asks you to check it.
 - Agent binaries come only from the fixed locations listed under [Dependencies](#dependencies), and version-manager shims are refused. Each binary must be a regular file owned by you or root that nobody else can write, in folders nobody else can write, and it is checked again right before it runs.
-- The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, and `OPENCODE_PERMISSION` for OpenCode. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin` and the three `PI_*` variables above. API keys, tokens and display variables are never passed on.
+- The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, and `OPENCODE_PERMISSION` for OpenCode. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin`, the three `PI_*` variables above and, to resume or fork a session, `PI_CODING_AGENT_SESSION_DIR`. API keys, tokens and display variables are never passed on.
 - The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused. No project is `~/AutoPilot`, which passes the same check.
 - The working folder has to be yours and writable by you alone, and so does the agent configuration already in it: `.claude`, `.codex`, `.cursor`, `.gemini`, `.opencode`, `.pi`, `.mcp.json`, `opencode.json`, `opencode.jsonc`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and everything directly inside those folders must belong to you or root, with nobody else able to write to them. Whoever could change them would choose the hooks, allow rules, MCP servers and instructions a run loads while nobody is watching. This is checked when you arm a job and again when it fires.
 - A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot`, its bytecode cache and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
-- Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session (or Pi session file), the working folder, and a notification's title and text: the job's label, its agent and what happened. Never a prompt, a key or a token.
-- The system tools it calls (`systemd-run`, `systemctl`, `busctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
+- Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session id. Never a folder (the working folder, one the folder picker walks or one it lists sessions for), a session file's path, a job's label, a notification's text, a prompt, a key or a token: the agent starts in its working folder instead of being told it, the panel sends every folder to the helper on standard input, and a notification goes to the session bus over the bus's own socket rather than through a program.
+- The system tools it calls (`systemd-run`, `systemctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
 - Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. Besides its own state and runtime folders, the only folder it makes is `~/AutoPilot`, mode 0700, when you pick No project for a new session and nothing is there yet. Whatever is already at that path is used only when it is a folder of yours, not a link, that nobody else can write; anything else is left as it is and refused. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
 
 ### What it reads, and what it never opens

@@ -14,6 +14,7 @@ Event shapes follow the recorded streams in the R7 research notes (Cursor stream
 mode, OpenCode APIError lines with a responseBody).
 """
 import datetime
+import glob
 import hashlib
 import json
 import os
@@ -298,7 +299,18 @@ def pi(mode, argv, data, stdin):
     model = value_after(argv, "--model") or "fake-model"
     session = value_after(argv, "--session")
     sid = value_after(argv, "--session-id") or str(uuid.uuid4())
-    if session:
+    if session and "/" not in session and not session.endswith(".jsonl"):
+        # Like Pi 0.73: an id is looked up in the session folder ($PI_CODING_AGENT_SESSION_DIR, else
+        # the working folder's); found nowhere there, Pi searches every project and, for --session,
+        # asks on stdin whether to fork, which reads the prompt as the answer and runs nothing.
+        folder = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.dirname(
+            _pi_session_file(os.getcwd(), "x", session))
+        if not glob.glob(os.path.join(folder, "*_" + session + ".jsonl")):
+            sys.stdout.write("Session found in different project\n"
+                             "Fork this session into current directory? [y/N] Aborted.\n")
+            return 0
+        sid = session
+    elif session:
         match = re.search(r"_([0-9a-f-]{36})\.jsonl$", session)
         sid = match.group(1) if match else sid
     if mode == "pi_no_header":

@@ -2,9 +2,13 @@
 
 Every notification is a fixed template plus the job label, a local clock time, a duration or
 a fixed reason sentence. No prompt text and no agent output ever reaches a notification.
+
+The notification is sent over the session bus's socket (sessionbus), not by a program: a label is
+typed by somebody or built from a folder name, and a program's arguments are readable by every
+account on the computer.
 """
 
-from . import bounded, consts, edition, fsio, settings, timeutil
+from . import bounded, consts, edition, fsio, sessionbus, settings, timeutil
 
 TEMPLATES = {
     "done": ("Done", '"{label}" finished in {duration}.'),
@@ -120,7 +124,7 @@ def render(event, job, *, now, fire_at=None, duration_s=None, reason=None, cli_c
 
 
 def send(event, job, *, now, fire_at=None, duration_s=None, reason=None, cli_changed=False):
-    """Show one notification through the session bus. Returns True when busctl accepted it."""
+    """Show one notification through the session bus. True when the notification server answered."""
     rendered = render(event, job, now=now, fire_at=fire_at, duration_s=duration_s, reason=reason,
                       cli_changed=cli_changed)
     if rendered is None:
@@ -129,15 +133,16 @@ def send(event, job, *, now, fire_at=None, duration_s=None, reason=None, cli_cha
     if policy == "never" or (policy == "failures" and event in SUCCESS_EVENTS):
         return False
     summary, body = rendered
-    argv = [consts.TOOLS["busctl"], "--user", "call", "org.freedesktop.Notifications",
-            "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "Notify", "susssasa{sv}i",
-            edition.NOTIFY_APP_NAME, "0", "", summary, body, "0", "0", "6000"]
+    deadline = _NOTIFY_DEADLINE_S
+    remaining = bounded.remaining_budget()
+    if remaining is not None:
+        deadline = min(deadline, remaining)
+    if deadline <= 0:
+        return False
     try:
-        res = bounded.run_bounded(argv, env=bounded.tool_env(), deadline_s=_NOTIFY_DEADLINE_S,
-                                  stdout_cap=_CAP, stderr_cap=_CAP)
+        return sessionbus.notify(edition.NOTIFY_APP_NAME, summary, body, 6000, deadline_s=deadline)
     except Exception:
         return False
-    return res.get("rc") == 0 and not res.get("timedOut")
 
 
 def ipc_ping():
