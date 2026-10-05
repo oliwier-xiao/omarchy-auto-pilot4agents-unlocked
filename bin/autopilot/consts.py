@@ -174,6 +174,10 @@ FIND_DEADLINE_S = 1.5
 FIND_LIMIT = 40
 FIND_WORDS_MAX = 5
 FIND_QUERY_MAX = 80
+# Matching cost grows with the length of a word and of a name: a word counts its first 32 letters,
+# a name its first 256 (after folding, which can make one character several).
+FIND_WORD_CHARS = 32
+FIND_NAME_CHARS = 256
 FIND_KNOWN_MAX = 64
 FIND_NOT_ENTERED = frozenset(("node_modules", "__pycache__", "venv", "site-packages", "bower_components",
                               "target", "build", "dist", "Trash", "snap", "steamapps"))

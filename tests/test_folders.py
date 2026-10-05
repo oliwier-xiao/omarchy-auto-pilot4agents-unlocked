@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import sys
+import time
 import unittest
 
 sys.dont_write_bytecode = True
@@ -51,6 +52,35 @@ class DirsTests(ScanCase):
         self.assertEqual(code["parent"], os.path.realpath(self.home))
         api = folders.list_dirs(os.path.join(self.home, "code", "api"))
         self.assertEqual((names(api), api["git"]), ([], True))
+
+    def test_a_mounted_folder_is_listed_by_name_and_never_looked_at(self):
+        # A mount whose server has gone away blocks every stat on it: the tree must not wait on one.
+        self.mkdir("remote/.git")
+        self.mkdir("local")
+        real = os.path.realpath(self.home)
+        self.patch(folders, "_mounts", frozenset({real + "/remote"}))
+        looked = []
+        real_stat = os.stat
+
+        def counting_stat(path, *args, **kwargs):
+            looked.append(path)
+            return real_stat(path, *args, **kwargs)
+        self.patch(os, "stat", counting_stat)
+        by = {entry["name"]: entry for entry in folders.list_dirs(self.home)["entries"]}
+        self.assertEqual((by["remote"]["mount"], by["remote"]["git"], by["remote"]["own"]), (True, False, None))
+        self.assertNotIn("mount", by["local"])
+        self.assertFalse([p for p in looked if isinstance(p, str) and "remote" in p], looked)
+        # Opened on purpose, it is read like any other folder.
+        self.assertEqual(folders.list_dirs(os.path.join(self.home, "remote"))["state"], "ok")
+
+    def test_mountinfo_names_mount_points_with_their_escapes(self):
+        text = ("22 1 0:21 / / rw,relatime shared:1 - btrfs /dev/x rw\n"
+                "40 22 0:40 / /home/u/my\\040nas rw,nosuid shared:2 - fuse.sshfs h:/ rw\n"
+                "41 22 0:41 / /home/u/back\\134slash rw - tmpfs t rw\n"
+                "garbage\n")
+        self.assertEqual(folders.parse_mountinfo(text), frozenset({"/", "/home/u/my nas", "/home/u/back\\slash"}))
+        self.patch(folders, "_mounts", None)
+        self.assertIn("/", folders.mount_points(), "this run's own mounts, read once")
 
     def test_links_inside_home_carry_their_target_and_others_none(self):
         target = self.mkdir("code/api")
@@ -337,6 +367,33 @@ class FindDirsTests(ScanCase):
         self.patch(consts, "OUTPUT_CAP", dict(consts.OUTPUT_CAP, **{"find-dirs": folders._CAP_SLACK + 1500}))
         cut = self.find("d0")
         self.assertTrue(0 < len(cut["entries"]) < 40 and cut["truncated"] and cut["reason"] == "cap", cut["reason"])
+
+    def test_a_mounted_folder_is_neither_entered_nor_answered(self):
+        self.mkdir("remote/projects-far/.git")
+        self.mkdir("Projects")
+        real = os.path.realpath(self.home)
+        self.patch(folders, "_mounts", frozenset({real + "/remote"}))
+        opened = []
+        real_open = os.open
+
+        def counting_open(path, *args, **kwargs):
+            opened.append(path)
+            return real_open(path, *args, **kwargs)
+        self.patch(os, "open", counting_open)
+        self.assertEqual(self.paths("projects"), ["Projects"])
+        self.assertEqual(self.paths("remote"), [])
+        self.assertNotIn("remote", opened, "never even opened")
+
+    def test_long_names_and_words_stay_inside_the_deadline(self):
+        # Seven levels of 255-letter names and 1500 more below them, searched for an 80-letter
+        # word: scoring is capped by word and name length, and the clock is read for every entry.
+        deep = "/".join(["a" * 255] * 7)
+        for n in range(1500):
+            self.mkdir(deep + "/" + "a" * 251 + "%04d" % n)
+        started = time.monotonic()
+        answer = self.find("a" * 78 + "zz")
+        self.assertLess(time.monotonic() - started, consts.FIND_DEADLINE_S + 1.0)
+        self.assertTrue(answer["ok"])
 
     def test_find_dirs_argv_and_payload(self):
         self.mkdir("Projects")

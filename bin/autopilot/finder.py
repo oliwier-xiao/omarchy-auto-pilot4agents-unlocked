@@ -9,13 +9,17 @@ The walk is bounded and reads names only:
     folders a cap leaves out are always the deepest ones;
   - every folder is opened component by component from the home folder with O_DIRECTORY |
     O_NOFOLLOW, so a link is never followed and a folder swapped for a link is never entered;
-  - hidden folders (a name starting with "."), other file systems mounted under the home folder,
-    and names that are not printable UTF-8 are never entered; folders such as node_modules or
+  - hidden folders (a name starting with "."), folders another file system is mounted on (read
+    from /proc/self/mountinfo, and never even opened: a mount whose server has gone away blocks
+    whoever touches it) and names that are not printable UTF-8 are never entered; a folder whose
+    device still differs once opened is left too; folders such as node_modules or
     build, and Go's module cache (pkg/mod), are listed by name but never entered, since what is
     inside them is not where people work;
   - at most FIND_DIR_ENTRIES entries of any one folder (a Downloads folder with 60,000 files is
     not allowed to use up the search), and at most FIND_ENTRIES entries and FIND_FOLDERS folders
-    in all within FIND_DEADLINE_S, after which the answer says it stopped early;
+    in all within FIND_DEADLINE_S, looked at before every folder and every entry, after which
+    the answer says it stopped early; a word counts its first FIND_WORD_CHARS letters and a name
+    its first FIND_NAME_CHARS, so no one name can take long to score;
   - nothing is opened or read inside a folder: the folders that are answered get one fstat (whose
     folder it is) and one lstat of their .git entry (whether it is a git checkout).
 
@@ -159,10 +163,12 @@ def _in_order_from(word, folded, starts, first):
     return max(_ORDER_MIN, min(_ORDER_MAX, score)), [(p, p + 1) for p in positions]
 
 
-@functools.lru_cache(maxsize=65536)
+@functools.lru_cache(maxsize=4096)
 def _prepared(name):
-    """A name folded once: (folded, where, word starts, folded without separators)."""
+    """A name folded once, its first FIND_NAME_CHARS folded characters: (folded, where, word
+    starts, folded without separators)."""
     folded, where = fold(name)
+    folded, where = folded[:consts.FIND_NAME_CHARS], where[:consts.FIND_NAME_CHARS]
     return folded, where, _word_starts(name, folded, where), "".join(c for c in folded if c not in _SEPARATORS)
 
 
@@ -225,9 +231,24 @@ def score_word(word, name):
     return 0, []
 
 
-def score_folder(words, name, ancestors):
+def above_scorer(ancestors):
+    """above(word): the best score of word against the names above a folder, worked out once per
+    word for all the folders that share those names (the children of one folder)."""
+    memo = {}
+
+    def above(word):
+        if word not in memo:
+            memo[word] = max((score_word(word, up)[0] for up in ancestors), default=0)
+        return memo[word]
+    return above
+
+
+def score_folder(words, name, ancestors, above=None):
     """(score, marks) for a folder: every word must match its name or a folder above it, and at
-    least one word its name. ancestors are the names above it, nearest last."""
+    least one word its name. ancestors are the names above it, nearest last; above is
+    above_scorer(ancestors), passed in when siblings share it."""
+    if above is None:
+        above = above_scorer(ancestors)
     total, on_name, all_marks = 0.0, 0, []
     for word in words:
         score, marks = score_word(word, name)
@@ -236,10 +257,10 @@ def score_folder(words, name, ancestors):
             total += score
             all_marks.extend(marks)
             continue
-        above = max((score_word(word, up)[0] for up in ancestors), default=0)
-        if not above:
+        best_above = above(word)
+        if not best_above:
             return 0, []
-        total += _ANCESTOR * above
+        total += _ANCESTOR * best_above
     if not on_name:
         return 0, []
     typed = sum(len(w) for w in words)
@@ -269,7 +290,7 @@ def find_dirs(query, known=()):
     known are folders the picker already knows sessions in; they rank higher within a tier.
     """
     # One letter alone matches nearly every name: such words are left out.
-    words = [w for w in query_words(query) if len(w) >= 2][:consts.FIND_WORDS_MAX]
+    words = [w[:consts.FIND_WORD_CHARS] for w in query_words(query) if len(w) >= 2][:consts.FIND_WORDS_MAX]
     home = folders._home_real()
     known = frozenset(known)
     answer = {"home": home, "q": query, "entries": [], "truncated": False, "reason": None,
@@ -282,6 +303,7 @@ def find_dirs(query, known=()):
         answer["reason"] = "denied"
         return answer
     uid = os.getuid()
+    mounts = folders.mount_points()
     deadline = time.monotonic() + consts.FIND_DEADLINE_S
     hits = []
     entries = folders_seen = skipped = cut = 0
@@ -294,7 +316,11 @@ def find_dirs(query, known=()):
             for parts, in_repo in level:
                 if stop:
                     break
+                if time.monotonic() > deadline:
+                    stop = "time"
+                    break
                 found, children, checkout = [], [], False
+                above = above_scorer(parts)
                 fd = _open_from_home(home_fd, parts) if parts else os.dup(home_fd)
                 if fd is None:
                     continue
@@ -310,7 +336,7 @@ def find_dirs(query, known=()):
                             if entries > consts.FIND_ENTRIES:
                                 stop = "entries"
                                 break
-                            if entries % 256 == 0 and time.monotonic() > deadline:
+                            if time.monotonic() > deadline:
                                 stop = "time"
                                 break
                             if entry.name == ".git":
@@ -327,11 +353,13 @@ def find_dirs(query, known=()):
                             if name is None:
                                 skipped += 1
                                 continue
+                            if home + "/" + "/".join(parts + (name,)) in mounts:
+                                continue
                             folders_seen += 1
                             if folders_seen > consts.FIND_FOLDERS:
                                 stop = "folders"
                                 break
-                            score, marks = score_folder(words, name, parts)
+                            score, marks = score_folder(words, name, parts, above)
                             if score > 0:
                                 found.append([score, parts + (name,), marks])
                             if depth < consts.FIND_DEPTH and name not in consts.FIND_NOT_ENTERED \

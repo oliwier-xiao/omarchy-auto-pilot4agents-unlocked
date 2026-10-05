@@ -24,10 +24,17 @@ any other folder (jobs.check_cwd); anything else is left as it is and refused.
 
 Before a new session is drafted in a folder, the picker asks whether a job may run there: the same
 working folder rule (jobs.cwd_verdict), answered with its reason, for one folder at a time. It
-looks at that folder and at the agent configuration entries directly in it, and lists nothing.
+looks at that folder, at the agent configuration entries in it and at the entries directly inside
+those (jobs._agent_config_private, at most 256 each), judging a link by what it leads to the way
+the agent would load it, and lists nothing else.
+
+A folder another file system is mounted on (read from /proc/self/mountinfo) is listed by name and
+never looked at: a mount whose server has gone away blocks every stat on it, and that must not
+hold up the tree. It is read like any other folder once someone opens it.
 """
 
 import os
+import re
 import stat
 import time
 
@@ -75,6 +82,45 @@ def _clean_path(path):
     return path if all(_clean_name(part) is not None for part in path[1:].split("/")) else None
 
 
+_MOUNTINFO = "/proc/self/mountinfo"
+_MOUNTINFO_MAX = 1 << 20
+_MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
+_mounts = None
+
+
+def parse_mountinfo(text):
+    """The mount points named in mountinfo text (the fifth field of each line, unescaped)."""
+    points = set()
+    for line in text.splitlines():
+        fields = line.split(" ")
+        if len(fields) > 4 and fields[4].startswith("/"):
+            points.add(_MOUNT_ESCAPE.sub(lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return frozenset(points)
+
+
+def mount_points():
+    """Where file systems are mounted, read once per run from /proc/self/mountinfo (at most 1 MiB;
+    an unreadable or longer file gives what was read, and callers keep their st_dev check)."""
+    global _mounts
+    if _mounts is None:
+        chunks, size = [], 0
+        try:
+            fd = os.open(_MOUNTINFO, os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                while size < _MOUNTINFO_MAX:
+                    chunk = os.read(fd, min(65536, _MOUNTINFO_MAX - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+        _mounts = parse_mountinfo(b"".join(chunks).decode("utf-8", "surrogateescape"))
+    return _mounts
+
+
 def _git_at(name, dir_fd):
     """Whether name (relative to dir_fd) holds a .git folder or file, looked at with lstat."""
     try:
@@ -91,6 +137,16 @@ def _entry(entry, real, home, uid, dir_fd):
     name = _clean_name(entry.name)
     if name is None:
         return None, True
+    if os.path.join(real, name) in mount_points():
+        # Listed by name, never looked at (see the module docstring); whose it is stays unknown.
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError:
+            return None, False
+        if not is_dir:
+            return None, False
+        return {"name": name, "hidden": name.startswith("."), "git": False, "own": None, "link": False,
+                "target": None, "outside": False, "mount": True}, False
     try:
         info = entry.stat(follow_symlinks=False)
     except OSError:

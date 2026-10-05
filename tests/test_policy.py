@@ -537,14 +537,30 @@ def check_no_pycache():
             if os.path.basename(rel) == "__pycache__" or rel.endswith((".pyc", ".pyo"))]
 
 
+_PLAIN_FORMAT = re.compile(r"(?:Text|TextEdit)\.PlainText")
+
+
+def _text_format_problem(body):
+    """Why a text block's textFormat is not plain, or None. Only Text.PlainText (TextEdit.PlainText)
+    is accepted, never a condition: StyledText or RichText over an escaped name is still markup."""
+    values = re.findall(r"(?:^|[\s;])textFormat\s*:\s*([^\n;]+)", body)
+    if not values:
+        return "without textFormat"
+    for value in values:
+        if not _PLAIN_FORMAT.fullmatch(value.strip()):
+            return "with textFormat %s" % value.strip()
+    return None
+
+
 def check_plaintext_every_text():
-    """Every Text, Label, TextEdit, TextArea and TextField block sets textFormat."""
+    """Every Text, Label, TextEdit, TextArea and TextField block sets textFormat to PlainText."""
     problems = []
     for rel in qml_files(include_lint=True):
         code = strip_code(read_text(rel))
         for name, number, body in object_blocks(code, ("Text", "Label", "TextEdit", "TextArea", "TextField")):
-            if not re.search(r"(?:^|[\s;])textFormat\s*:", body):
-                problems.append("%s:%d: %s block without textFormat" % (rel, number, name))
+            problem = _text_format_problem(body)
+            if problem:
+                problems.append("%s:%d: %s block %s" % (rel, number, name, problem))
     return problems
 
 
@@ -1116,6 +1132,11 @@ class PolicyCheckerSelfTests(unittest.TestCase):
         labels = object_blocks(code, ("Text", "Label"))
         missing = [name for name, _line, body in labels if "textFormat" not in body]
         self.assertEqual(missing, ["Label"])
+        self.assertIsNone(_text_format_problem(" textFormat: Text.PlainText\n"))
+        self.assertIsNone(_text_format_problem(" textFormat: TextEdit.PlainText\n"))
+        for planted in ("Text.StyledText", "Text.RichText", "Text.AutoText", "Text.MarkdownText",
+                        "row.session ? Text.PlainText : Text.StyledText", "root.format"):
+            self.assertIsNotNone(_text_format_problem(" textFormat: %s\n" % planted), planted)
         timers = object_blocks(code, ("Timer",))
         self.assertFalse(_interval_ok(re.search(r"interval\s*:\s*([^\n;]+)", timers[0][2]).group(1)))
         self.assertTrue(_interval_ok("Model.clampInterval(root.delay)"))
