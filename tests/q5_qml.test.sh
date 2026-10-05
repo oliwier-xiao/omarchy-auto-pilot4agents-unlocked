@@ -541,7 +541,7 @@ Item {
       var themes = [["catppuccin-latte", "#eff1f5"], ["tokyo-night", "#1a1b26"], ["gruvbox", "#282828"], ["nord", "#2e3440"],
                     ["rose-pine", "#faf4ed"], ["matte-black", "#121212"], ["ristretto", "#2c2525"]]
       var ids = Edition.HARNESS_IDS
-      check(C, ids.length === 6 && ids.indexOf("cursor") === 4 && ids.indexOf("pi") === 5, "six agents in edition order")
+      check(C, ids.length === 6 && ids.indexOf("cursor") === 3 && ids.indexOf("pi") === 4 && ids.indexOf("gemini") === 5, "six agents in edition order, Gemini last")
       check(C, String(Tint.BRAND.cursor).toUpperCase() === "#BB64D8" && String(Tint.BRAND.pi).toUpperCase() === "#97C639", "brand inks")
       // Red only for real problems: no agent ink may sit near the reds themes use for urgent.
       var urgents = ["#f7768e", "#f38ba8", "#fb4934", "#bf616a", "#eb6f92", "#e67e80", "#c34043", "#fd6883", "#d20f39"]

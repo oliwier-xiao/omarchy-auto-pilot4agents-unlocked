@@ -589,11 +589,16 @@ Item {
       // Tab walks the sections.
       root.press(Qt.Key_Tab)
       root.check(root.compose.section === 1 && panel.footerText.indexOf("agent") >= 0, "Tab to Send to")
+      // A fresh draft has no agent: no chip is lit, and the first Right chooses the one under the cursor.
+      root.check(root.compose._agentChosen === false && root.find(root.sendTo, function (i) { return i.pill === true && i.selected === true }) === null,
+                 "no agent is chosen at the start")
+      root.press(Qt.Key_Right)
+      root.check(root.compose.harness === "claude" && root.compose._agentChosen === true, "the first Right chooses the agent under the cursor")
       root.press(Qt.Key_Right)
       root.check(root.compose.harness === "opencode", "Right picks OpenCode")
       root.press(Qt.Key_Right)
-      root.check(root.compose.harness === "gemini", "Right skips the disabled Codex")
-      root.check(JSON.stringify(root.sendTo.modes) === JSON.stringify(["resume", "new"]), "no fork for Gemini")
+      root.check(root.compose.harness === "cursor", "Right skips the disabled Codex")
+      root.check(JSON.stringify(root.sendTo.modes) === JSON.stringify(["resume", "new"]), "no fork for Cursor")
       root.check(root.sendTo.agentState("codex").reasonKey === "not_signed_in" && !root.sendTo.agentState("codex").enabled, "Codex state, no words")
       root.check(root.sendTo.agentState("gemini").reasonKey === "sign_in_unknown" && root.sendTo.agentState("gemini").warn
                  && root.sendTo.agentState("gemini").enabled, "Gemini sign-in unknown, still pickable")

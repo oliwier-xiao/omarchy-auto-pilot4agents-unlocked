@@ -17,12 +17,20 @@ import "../lib/Model.js" as Model
 // it. Fork is not offered for Gemini, which has none (C7), nor for Cursor, whose CLI
 // cannot fork a chat. Cursor stays pickable while it waits for its one-time check
 // (drafts and the Will run line work); the helper refuses to arm it.
+//
+// A fresh draft has no agent and no session yet: no chip is lit until one is chosen here
+// or by picking a session, so nobody arms a job for an agent they never chose. Arming
+// without a place lights the session box in the failure ink (`missing`).
 Item {
   id: root
 
   required property var theme
 
   property string harness: "claude"
+  // An agent was chosen (a chip, a picked session, a loaded job); until then no chip is lit.
+  property bool agentChosen: true
+  // Arming was refused because nothing says where the prompt goes.
+  property bool missing: false
   // Draft target plus display keys the service drops: title, updatedAtMs, messages.
   property var target: ({ mode: "new", sessionId: null, cwd: null })
   // `service.agents`: harness -> Agents entry; {} until the first answer.
@@ -80,7 +88,20 @@ Item {
     return Model.harnessShortName(String(id || ""))
   }
 
+  // The chip the agent row's cursor sits on: the chosen agent, else the first one that can run.
+  readonly property string ringAgent: {
+    if (root.agentChosen) return root.harness
+    for (var i = 0; i < Edition.HARNESS_IDS.length; i++)
+      if (root.agentState(Edition.HARNESS_IDS[i]).enabled) return Edition.HARNESS_IDS[i]
+    return Edition.HARNESS_IDS[0]
+  }
+
   function stepHarness(dir) {
+    // Nothing chosen yet: the first press chooses the chip under the cursor.
+    if (!root.agentChosen) {
+      root.harnessPicked(root.ringAgent)
+      return
+    }
     var ids = Edition.HARNESS_IDS
     var i = ids.indexOf(root.harness)
     for (var n = 1; n < ids.length; n++) {
@@ -121,6 +142,7 @@ Item {
     if (root.hasSession && root.mode === "fork") return "fork: a copy continues, the original stays" + msgs
     if (root.noProject) return "new session in " + Model.shortPath(root.cwd, root.home) + ", no project needed"
     if (root.cwd !== "") return "new session in " + Model.shortPath(root.cwd, root.home)
+    if (root.missing) return "Select where to send it: a session, a folder for a new session, or No project."
     return "No session yet. Pick one, a folder for a new session, or No project."
   }
 
@@ -142,8 +164,10 @@ Item {
     }
     if (key === Qt.Key_Return || key === Qt.Key_Enter || key === Qt.Key_Space) {
       if (root.rowId === "mode") root.modeRequested(root.modes[Math.min(root._modeCursor, root.modes.length - 1)])
+      // Nothing chosen yet: Enter chooses the chip under the cursor.
+      else if (root.rowId === "agent" && !root.agentChosen && root.agentState(root.ringAgent).ready) root.harnessPicked(root.ringAgent)
       // The chip under the cursor cannot run as it stands: say how to sign it in first.
-      else if (root.rowId === "agent" && !root.agentState(root.harness).ready) root.signInRequested(root.harness)
+      else if (root.rowId === "agent" && !root.agentState(root.ringAgent).ready) root.signInRequested(root.ringAgent)
       else root.pickSessionRequested()
       return true
     }
@@ -153,6 +177,10 @@ Item {
     if (key === Qt.Key_G && root.nonGitWarning) { root.allowNonGitRequested(); return true }
     return false
   }
+
+  // Nothing chosen yet: the cursor waits on the session box, where Enter opens Where to run.
+  onAgentChosenChanged: if (!root.agentChosen) root._row = 1
+  Component.onCompleted: if (!root.agentChosen) root._row = 1
 
   onTargetChanged: {
     var i = root.modes.indexOf(root.mode)
@@ -189,8 +217,9 @@ Item {
             pill: true
             harness: agentCell.modelData
             text: root.chipLabel(agentCell.modelData)
-            selected: root.harness === agentCell.modelData
-            hasCursor: root.hasCursor && root.rowId === "agent" && root.harness === agentCell.modelData
+            selected: root.agentChosen && root.harness === agentCell.modelData
+            // No ring while nothing is chosen: a ringed chip would read as the chosen one.
+            hasCursor: root.agentChosen && root.hasCursor && root.rowId === "agent" && root.harness === agentCell.modelData
             enabled: agentCell.agentState.enabled
             // One glyph, no words: the reason lives in the sheet the chip raises.
             note: agentCell.agentState.warn ? Model.GLYPH.alert : ""
@@ -224,8 +253,11 @@ Item {
       height: Style.space(48)
       radius: Style.cornerRadius
       readonly property bool cursorHere: root.hasCursor && root.rowId === "session"
-      color: sessionBox.cursorHere ? Style.hoverFillFor(root.theme.fg, root.theme.accent) : Util.alpha(root.theme.fg, 0.04)
-      borderSpec: Border.controlSpec(sessionBox.cursorHere ? "hover-cursor" : "normal", root.theme.fg, root.theme.accent)
+      readonly property bool warn: root.missing && !root.hasSession && root.cwd === ""
+      color: sessionBox.cursorHere ? Style.hoverFillFor(root.theme.fg, root.theme.accent)
+        : (sessionBox.warn ? Util.alpha(root.theme.badInk, 0.08) : Util.alpha(root.theme.fg, 0.04))
+      borderSpec: sessionBox.warn ? Border.flat(Util.alpha(root.theme.badInk, 0.85), 1)
+        : Border.controlSpec(sessionBox.cursorHere ? "hover-cursor" : "normal", root.theme.fg, root.theme.accent)
 
       HarnessRail {
         anchors.left: parent.left
@@ -235,7 +267,7 @@ Item {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Style.space(5)
         theme: root.theme
-        harness: root.harness
+        harness: root.agentChosen ? root.harness : ""
         strength: root.hasSession || root.cwd !== "" ? 1.0 : 0.35
       }
 
@@ -246,9 +278,21 @@ Item {
         anchors.top: parent.top
         anchors.topMargin: Style.space(9)
         theme: root.theme
-        agent: root.harness
+        agent: root.agentChosen ? root.harness : ""
         size: Style.space(14)
         dimmed: !root.hasSession && root.cwd === ""
+      }
+
+      // No agent yet: a plain send glyph holds the mark's place.
+      Text {
+        anchors.left: sessionMark.left
+        anchors.verticalCenter: sessionMark.verticalCenter
+        visible: !root.agentChosen
+        textFormat: Text.PlainText
+        text: "\uDB81\uDC8A"   // md-send U+F048A
+        color: sessionBox.warn ? root.theme.badInk : root.theme.soft
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.glyph
       }
 
       // The title, then its folder in the soft ink: two voices, so a long title never
@@ -300,7 +344,7 @@ Item {
         anchors.bottomMargin: Style.space(7)
         textFormat: Text.PlainText
         text: root.caption
-        color: root.theme.soft
+        color: sessionBox.warn ? root.theme.badInk : root.theme.soft
         elide: Text.ElideMiddle
         maximumLineCount: 1
         font.family: root.theme.fontFamily
@@ -359,7 +403,7 @@ Item {
           theme: root.theme
           text: root.modeLabels[modeChip.modelData]
           note: root.modeKeys[modeChip.modelData]
-          selected: root.mode === modeChip.modelData && (root.hasSession || modeChip.modelData === "new")
+          selected: root.mode === modeChip.modelData && (root.hasSession || (modeChip.modelData === "new" && root.cwd !== ""))
           hasCursor: root.hasCursor && root.rowId === "mode" && root._modeCursor === modeChip.index
           enabled: modeChip.modelData === "new" || root.sessionKnown
           onClicked: {

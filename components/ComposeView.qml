@@ -60,6 +60,13 @@ Item {
                           level: Edition.DEFAULT_LEVEL, limits: {}, model: null, allowPaid: false, provider: null,
                           trigger: { kind: "now" } })
   property bool _touched: false
+  // A fresh draft has no agent: the chips stay unlit until one is chosen (a chip, a picked
+  // session, a loaded job). The draft still carries the default agent for the rows that need
+  // one, but nothing arms for it unchosen: a place has to be picked first, and picking one
+  // chooses its agent.
+  property bool _agentChosen: false
+  // Arming was refused for want of a place: the Send to box says so in the failure ink.
+  property bool _needsTarget: false
   property var _lastSession: null
   property var _preview: null
   property string _previewHarness: ""
@@ -134,6 +141,7 @@ Item {
   }
 
   readonly property string levelCaption: {
+    if (!root._agentChosen) return ""
     for (var i = 0; i < root.levels.length; i++) {
       if (root.levels[i] && root.levels[i].id === root.level) {
         var h = root.levels[i].harness ? root.levels[i].harness[root.harness] : null
@@ -317,6 +325,7 @@ Item {
     root._armQueued = false
     root._draft = d
     root._touched = true
+    root._agentChosen = true
     root._lastSession = typeof d.target.sessionId === "string" && d.target.sessionId !== ""
       ? { harness: d.harness, sessionId: d.target.sessionId, cwd: d.target.cwd, title: d.target.title || "",
           sessionPath: d.target.sessionPath } : null
@@ -350,6 +359,7 @@ Item {
                             messages: t.messages, sessionPath: spath }
     root._draft = d
     root._touched = true
+    root._agentChosen = true
     root.section = 1
     if (notes.length > 0) root.noticeRequested(notes.join(" "), "info", null)
   }
@@ -370,6 +380,7 @@ Item {
     d = root.fixTrigger(d, notes)
     root._draft = d
     root._touched = true
+    root._agentChosen = true
     root.section = 3
     options.focusRow("model")
     if (notes.length > 0) root.noticeRequested(notes.join(" "), "info", null)
@@ -382,6 +393,8 @@ Item {
     root._armQueued = false
     root._draft = root.freshDraft()
     root._touched = false
+    root._agentChosen = false
+    root._needsTarget = false
     root._lastSession = null
     root._preview = null
     root._previewHarness = ""
@@ -392,7 +405,15 @@ Item {
   }
 
   function setHarness(h) {
-    if (Edition.HARNESS_IDS.indexOf(h) < 0 || h === root.harness) return
+    if (Edition.HARNESS_IDS.indexOf(h) < 0) return
+    if (h === root.harness) {
+      if (!root._agentChosen) {
+        root._agentChosen = true
+        root._touched = true
+      }
+      return
+    }
+    root._agentChosen = true
     var notes = []
     if (root.hasSession) {
       notes.push("That session belongs to " + Model.harnessName(root.harness) + ". Pick one for "
@@ -437,12 +458,18 @@ Item {
 
   function openSessionSheet() {
     root.leaveEditor()
-    root.sheetRequested("session", { harness: root.harness, cwd: typeof root.target.cwd === "string" ? root.target.cwd : "",
+    // No agent chosen yet: the sheet does not narrow its list to the default one.
+    root.sheetRequested("session", { harness: root._agentChosen ? root.harness : "", cwd: typeof root.target.cwd === "string" ? root.target.cwd : "",
                                      sessionId: typeof root.target.sessionId === "string" ? root.target.sessionId : "" })
   }
 
   function openModelSheet(query) {
     root.leaveEditor()
+    if (!root._agentChosen) {
+      root.noticeRequested("Choose the agent first: pick a session or a folder, or an agent chip.", "warn", null)
+      root.setSection(1)
+      return
+    }
     root.setSection(3)
     root.sheetRequested("model", { harness: root.harness, provider: root.provider, model: root.model,
                                    allowPaid: root.allowPaid, query: typeof query === "string" ? query : "",
@@ -459,7 +486,7 @@ Item {
     if (!trigger || typeof trigger !== "object" || typeof trigger.kind !== "string") return
     var kind = trigger.kind
     if (Model.RESET_NAMES.hasOwnProperty(kind)
-        && Compose.resetKindsFor(root.harness, root.provider, root.model, root.billing).indexOf(kind) < 0) return
+        && (!root._agentChosen || Compose.resetKindsFor(root.harness, root.provider, root.model, root.billing).indexOf(kind) < 0)) return
     var old = root._draft && root._draft.trigger && typeof root._draft.trigger === "object" ? root._draft.trigger : {}
     var t = { kind: kind, fireAt: typeof trigger.fireAt === "number" ? trigger.fireAt : null,
               delaySec: typeof trigger.delaySec === "number" ? trigger.delaySec : null }
@@ -622,7 +649,8 @@ Item {
     }
     if (!root.targetComplete) {
       root.clearGuard()
-      root.noticeRequested("Pick a session or a folder first.", "warn", null)
+      root._needsTarget = true
+      root.noticeRequested("Select where to send it: a session, a folder for a new session, or No project.", "error", null)
       root.setSection(1)
       return
     }
@@ -754,6 +782,7 @@ Item {
   }
 
   Component.onCompleted: root._draft = root.freshDraft()
+  onTargetCompleteChanged: if (root.targetComplete) root._needsTarget = false
 
   Connections {
     target: root.service
@@ -938,6 +967,8 @@ Item {
       height: sendTo.implicitHeight
       theme: root.theme
       harness: root.harness
+      agentChosen: root._agentChosen
+      missing: root._needsTarget
       target: root.target
       agents: root.agents
       hasCursor: root.active && root.section === 1
@@ -997,7 +1028,8 @@ Item {
         trigger: root.trigger
         nowMs: root.nowMs
         providers: root.providers
-        harness: root.harness
+        // An agent's reset is offered once that agent is chosen.
+        harness: root._agentChosen ? root.harness : ""
         provider: root.provider
         model: root.model
         billing: root.billing
@@ -1038,6 +1070,7 @@ Item {
         limits: root._draft.limits || ({})
         model: root._draft.model === undefined ? null : root._draft.model
         harness: root.harness
+        agentChosen: root._agentChosen
         levels: root.levels
         caps: root.service && root.service.caps ? root.service.caps : ({})
         hasCursor: root.active && root.section === 3

@@ -25,7 +25,7 @@ SESSION_NAME_PREFIX = "autopilot-"                 # Claude --name / OpenCode --
 DEMO_STATE_ENV = "AP4U_STATE_DIR"                  # honoured only while the kill switch exists (R0 C14)
 SCHEMA_VERSION = 1
 
-HARNESS_IDS = ("claude", "opencode", "codex", "gemini", "cursor", "pi")
+HARNESS_IDS = ("claude", "opencode", "codex", "cursor", "pi", "gemini")
 
 _OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
                   '"task":"deny","external_directory":"deny","doom_loop":"deny"}')

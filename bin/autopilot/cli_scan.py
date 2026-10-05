@@ -6,8 +6,9 @@ under limits.lock or by atomic replace). `workspace --create` makes the No proje
 """
 
 import re
+import unicodedata
 
-from . import agents, consts, folders, fsio, limits_history, sessions, timeutil, usage, windows
+from . import agents, consts, finder, folders, fsio, limits_history, sessions, timeutil, usage, windows
 from .errors import ApError
 
 _EPOCH_RE = re.compile(r"^[0-9]{1,10}$")
@@ -93,6 +94,36 @@ def cmd_dirs(argv, payload):
     if len(args) not in (2, 3) or args[0] != "--path" or not _cwd_ok(args[1]) or args[2:] not in ([], ["--hidden"]):
         raise ApError("bad_args")
     return dict({"ok": True}, **folders.list_dirs(args[1], hidden=len(args) == 3))
+
+
+def cmd_folder(argv, payload):
+    """folder -> whether a job may run in the folder given as {"path": <abs>} on stdin, and why not."""
+    if argv:
+        raise ApError("bad_args")
+    if not isinstance(payload, dict) or set(payload) != {"path"} or not _cwd_ok(payload["path"]):
+        raise ApError("bad_args")
+    return dict({"ok": True}, **folders.check_folder(payload["path"]))
+
+
+def cmd_find_dirs(argv, payload):
+    """find-dirs -> the folders under the home folder that best match the words given as
+    {"q": <words>, "known": [<abs>, ...]} on stdin (known: folders with sessions, ranked higher)."""
+    if argv:
+        raise ApError("bad_args")
+    if not isinstance(payload, dict) or not set(payload) <= {"q", "known"} or "q" not in payload:
+        raise ApError("bad_args")
+    query, known = payload["q"], payload.get("known", [])
+    if not isinstance(query, str) or not 0 < len(query) <= consts.FIND_QUERY_MAX:
+        raise ApError("bad_args")
+    # Zero-width joiners and the like (inside emoji, pasted text) carry no letters: left out.
+    query = "".join(ch for ch in query if unicodedata.category(ch) != "Cf")
+    if not query.isprintable():
+        raise ApError("bad_args")
+    if len("".join(query.split())) < 2:
+        raise ApError("bad_args")
+    if not isinstance(known, list) or len(known) > consts.FIND_KNOWN_MAX or not all(_cwd_ok(k) for k in known):
+        raise ApError("bad_args")
+    return dict({"ok": True}, **finder.find_dirs(query, known))
 
 
 def cmd_workspace(argv, payload):

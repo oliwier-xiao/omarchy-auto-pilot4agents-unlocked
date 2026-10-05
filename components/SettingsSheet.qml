@@ -367,20 +367,10 @@ Item {
     anchors.top: parent.top
     height: Style.space(28)
 
-    Text {
-      anchors.left: parent.left
-      anchors.verticalCenter: parent.verticalCenter
-      textFormat: Text.PlainText
-      text: "Settings"
-      color: root.theme.strong
-      font.family: root.theme.fontFamily
-      font.pixelSize: root.theme.type.title
-      font.bold: true
-    }
-
+    // Back first, as in every desktop window: the way out sits where the eye starts.
     ActionButton {
       id: backButton
-      anchors.right: parent.right
+      anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       theme: root.theme
       hasCursor: backButton.hovered
@@ -388,6 +378,21 @@ Item {
       text: "Back"
       shortcut: "Esc"
       onClicked: root.close()
+    }
+
+    Text {
+      anchors.left: backButton.right
+      anchors.leftMargin: Style.space(12)
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: "Settings"
+      color: root.theme.strong
+      font.family: root.theme.fontFamily
+      font.pixelSize: root.theme.type.title
+      font.bold: true
+      elide: Text.ElideRight
+      maximumLineCount: 1
     }
   }
 

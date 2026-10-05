@@ -28,6 +28,8 @@ Item {
   property var limits: ({})
   property var model: null
   property string harness: "claude"
+  // False until the draft's agent is chosen: rows only one agent has stay out until then.
+  property bool agentChosen: true
   // `service.levels`: LEVELS entries verbatim, `unavailable` included.
   property var levels: []
   property bool hasCursor: false
@@ -102,7 +104,7 @@ Item {
     return out.join(" ")
   }
 
-  readonly property bool claudeLimits: root.harness === "claude"
+  readonly property bool claudeLimits: root.agentChosen && root.harness === "claude"
   readonly property var rows: {
     var out = ["level", "paid"]
     if (root.claudeLimits && root.allowPaid) out.push("budget")
@@ -679,7 +681,7 @@ Item {
 
     Text {
       width: parent.width
-      visible: root._note !== "" || !root.claudeLimits
+      visible: root._note !== "" || (root.agentChosen && !root.claudeLimits)
       textFormat: Text.PlainText
       text: root._note !== "" ? root._note : "Max turns and budget apply to Claude Code only. Other agents stop at the run time."
       color: root._note !== "" && root._noteKind === "warn" ? root.theme.warnInk : root.theme.soft

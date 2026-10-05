@@ -162,20 +162,10 @@ Item {
       width: parent.width
       height: Style.space(28)
 
-      Text {
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        textFormat: Text.PlainText
-        text: (root._ids.length === 1 ? "Shift 1 job by " : "Shift " + root._ids.length + " jobs by ") + root.amountLabel(root.deltaSec)
-        color: root.theme.strong
-        font.family: root.theme.fontFamily
-        font.pixelSize: root.theme.type.title
-        font.bold: true
-      }
-
+      // Back first, as in every desktop window: the way out sits where the eye starts.
       ActionButton {
         id: backButton
-        anchors.right: parent.right
+        anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         theme: root.theme
         hasCursor: backButton.hovered
@@ -183,6 +173,21 @@ Item {
         text: "Back"
         shortcut: "Esc"
         onClicked: root.close()
+      }
+
+      Text {
+        anchors.left: backButton.right
+        anchors.leftMargin: Style.space(12)
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: (root._ids.length === 1 ? "Shift 1 job by " : "Shift " + root._ids.length + " jobs by ") + root.amountLabel(root.deltaSec)
+        color: root.theme.strong
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.title
+        font.bold: true
+        elide: Text.ElideRight
+        maximumLineCount: 1
       }
     }
 

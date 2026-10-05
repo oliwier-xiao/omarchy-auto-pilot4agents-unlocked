@@ -293,9 +293,23 @@ Item {
     anchors.topMargin: Style.space(4)
     height: Style.space(28)
 
+    // Back first, as in every desktop window: the way out sits where the eye starts.
+    ActionButton {
+      id: backButton
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      theme: root.theme
+      hasCursor: backButton.hovered
+      glyph: "\uDB80\uDC4D"   // md-arrow_left U+F004D
+      text: "Back"
+      shortcut: "Esc"
+      onClicked: root.close()
+    }
+
     AgentMark {
       id: headMark
-      anchors.left: parent.left
+      anchors.left: backButton.right
+      anchors.leftMargin: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
       theme: root.theme
       agent: root.harness
@@ -305,8 +319,7 @@ Item {
     Text {
       anchors.left: headMark.right
       anchors.leftMargin: Style.space(8)
-      anchors.right: backButton.left
-      anchors.rightMargin: Style.space(12)
+      anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: "Pick a model for " + Model.harnessName(root.harness)
@@ -318,17 +331,6 @@ Item {
       font.bold: true
     }
 
-    ActionButton {
-      id: backButton
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      theme: root.theme
-      hasCursor: backButton.hovered
-      glyph: "󰁍"   // md-arrow_left U+F004D
-      text: "Back"
-      shortcut: "Esc"
-      onClicked: root.close()
-    }
   }
 
   SearchField {

@@ -378,6 +378,32 @@ Window {
       stubService.dirs = next
     }
     function clearDirs() { stubService.dirs = ({}) }
+    // The folders of the tree whose names hold every word, best first.
+    function findDirs(q, known, cb) {
+      var words = q.toLowerCase().split(/\s+/).filter(function (w) { return w !== "" })
+      var out = []
+      for (var dir in stubService.tree) {
+        var list = stubService.tree[dir]
+        for (var i = 0; i < list.length; i++) {
+          var e = list[i]
+          var name = e.name.toLowerCase()
+          if (e.hidden || !words.every(function (w) { return name.indexOf(w) >= 0 })) continue
+          var at = name.indexOf(words[0])
+          var path = dir + "/" + e.name
+          out.push({ path: path, name: e.name, depth: path.split("/").length - 3, git: e.git === true, own: true,
+                     score: 1000 - at - path.length, marks: [[at, at + words[0].length]] })
+        }
+      }
+      out.sort(function (a, b) { return b.score - a.score })
+      stubService.later(cb, { ok: true, q: q, entries: out, truncated: false, reason: null })
+    }
+    // A folder of the tree, or one listed in its parent, is there.
+    function checkFolder(path, cb) {
+      var slash = path.lastIndexOf("/")
+      var parent = stubService.tree[path.slice(0, slash)] || []
+      var there = stubService.tree[path] !== undefined || parent.some(function (e) { return e.name === path.slice(slash + 1) })
+      stubService.later(cb, { ok: true, path: path, real: path, state: there ? "ok" : "missing", reason: there ? null : "missing" })
+    }
     function loadWorkspace(create, cb) { stubService.later(cb, { ok: true, path: "/home/u/AutoPilot", exists: true, created: false }) }
     function loadModels(harness, refresh) {}
     function loadTimeline(dayStartMs) {
@@ -558,7 +584,35 @@ Window {
         sheet.focusPane = "places"
         host.go(12)
       } else if (s === 12 && host.wait >= 6) {
-        host.pair("$T/out/where-noproject.png", function () {
+        host.pair("$T/out/where-noproject.png", function () { host.go(13) })
+      } else if (s === 13) {
+        var typed = p.sheetFor("session")
+        typed.focusPane = "list"
+        typed.editQuery("~/Code")
+        host.go(14)
+      } else if (s === 14 && host.wait >= 8) {
+        host.pair("$T/out/where-suggest.png", function () { host.go(15) })
+      } else if (s === 15) {
+        var folder = p.sheetFor("session")
+        folder.editQuery("~/code/api")
+        host.go(16)
+      } else if (s === 16 && host.wait >= 10) {
+        host.pair("$T/out/where-folder.png", function () { host.go(30) })
+      } else if (s === 30) {
+        p.sheetFor("session").editQuery("api")
+        host.go(31)
+      } else if (s === 31 && host.wait >= 10) {
+        host.pair("$T/out/where-search.png", function () { host.go(17) })
+      } else if (s === 17) {
+        p.sheetFor("session").close()
+        var fresh = host.compose()
+        fresh.reset()
+        fresh.setSection(1)
+        fresh._needsTarget = true
+        fresh.noticeRequested("Select where to send it: a session, a folder for a new session, or No project.", "error", null)
+        host.go(18)
+      } else if (s === 18 && host.wait >= 6) {
+        host.pair("$T/out/compose-empty.png", function () {
           Qt.exit(host.fails === 0 ? 0 : 4)
         })
       }
@@ -594,7 +648,12 @@ fit1600 "$T/out/compose.png" "$OUT/docs/compose.png"
 fit1600 "$T/out/queue.png" "$OUT/docs/queue.png"
 fit1600 "$T/out/history.png" "$OUT/docs/history.png"
 fit1600 "$T/out/where.png" "$OUT/docs/where.png"
-[ -n "${AP4A_SHOTS_EXTRA:-}" ] && fit1600 "$T/out/where-noproject.png" "$AP4A_SHOTS_EXTRA/where-noproject.png"
+if [ -n "${AP4A_SHOTS_EXTRA:-}" ]; then
+  for f in where-noproject where-suggest where-folder where-search compose-empty; do
+    need "$f.png"
+    fit1600 "$T/out/$f.png" "$AP4A_SHOTS_EXTRA/$f.png"
+  done
+fi
 
 "$PY" -I -S -B - "$OUT/preview.png" <<'PY'
 import struct, sys

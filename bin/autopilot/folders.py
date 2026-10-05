@@ -21,6 +21,10 @@ The No project folder is ~/AutoPilot. It is made only when someone picks it, mod
 when nothing is there yet. Whatever is there already is used only when it is a real folder (not a
 link) owned by this user that nobody else can write, and it passes the working folder check of
 any other folder (jobs.check_cwd); anything else is left as it is and refused.
+
+Before a new session is drafted in a folder, the picker asks whether a job may run there: the same
+working folder rule (jobs.cwd_verdict), answered with its reason, for one folder at a time. It
+looks at that folder and at the agent configuration entries directly in it, and lists nothing.
 """
 
 import os
@@ -197,6 +201,24 @@ def _usable(info):
     """A real folder, not a link, owned by this user, that nobody else can write."""
     return (stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
             and stat.S_IMODE(info.st_mode) & 0o022 == 0)
+
+
+def check_folder(path):
+    """Folder answer (without "ok"): whether a job may run in path, and why not.
+
+    state is "ok", "missing" (nothing there, or not a folder) or "refused"; reason is
+    jobs.cwd_verdict's reason, or None. real is the resolved path when it could be resolved.
+    """
+    real, reason = jobs.cwd_verdict(path)
+    if reason is None:
+        state = "ok"
+    elif reason in ("missing", "not_dir"):
+        state = "missing"
+    else:
+        state = "refused"
+    if real is not None and _clean_path(real) is None:
+        real = None
+    return {"path": path, "real": real, "state": state, "reason": reason}
 
 
 def workspace(create):

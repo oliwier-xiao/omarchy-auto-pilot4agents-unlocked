@@ -293,7 +293,8 @@ lib_case words '
       eq(six.map(function (h) { return Model.harnessName(h) }), ["Claude Code", "OpenCode", "Codex", "Gemini CLI", "Cursor Agent", "Pi"])
       eq(six.map(function (h) { return Model.cliName(h) }), ["claude", "opencode", "codex", "gemini", "cursor-agent", "pi"])
       if (root.py) {
-        eq(root.py.harnessIds, six)
+        // Gemini last: its chip is the one that opens a sign-in page before it can run.
+        eq(root.py.harnessIds, ["claude", "opencode", "codex", "cursor", "pi", "gemini"])
         eq(six.map(function (h) { return Model.harnessName(h) }), six.map(function (h) { return root.py.harnessNames[h] }))
         eq(six.map(function (h) { return Model.cliName(h) }), six.map(function (h) { return root.py.cliNames[h] }))
       }

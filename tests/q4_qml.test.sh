@@ -51,7 +51,8 @@ expected = {
     "settings-get": (7000, 16384, False, R), "settings-set": (9000, 16384, True, W), "copy-resume": (8000, 16384, False, W),
     "sessions": (13000, 921600, False, R), "usage": (8000, 131072, False, R), "agents": (35000, 65536, False, R),
     "models": (30000, 262144, False, R), "timeline": (9000, 262144, False, R),
-    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W),
+    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W), "folder": (8000, 65536, True, R),
+    "find-dirs": (9000, 131072, True, R),
 }
 bad = sorted(set(rows) ^ set(expected)) + sorted(k for k in rows if k in expected and rows[k] != expected[k])
 if bad:
@@ -388,13 +389,13 @@ Harness {
         p("gemini-daily", { harnesses: ["gemini"], source: "computed" }),
         p("pi", { headlineKey: null })
       ]
-      root.eq(Model.shownSources(providers, "auto"), ["claude", "zen-free", "codex", "gemini-daily", "cursor", "fireworks"])
+      root.eq(Model.shownSources(providers, "auto"), ["claude", "zen-free", "codex", "cursor", "gemini-daily", "fireworks"])
       root.eq(Model.shownSources(providers, undefined), Model.shownSources(providers, "auto"))
       root.eq(Model.shownSources(providers, ["cursor", "nope", "claude", "cursor", "broken", 7]), ["cursor", "claude", "broken"])
       root.eq(Model.shownSources(null, "auto"), [])
       root.eq(Model.shownSources(providers, []), [])
       root.eq(Model.limitChoices(providers).map(function (c) { return c.id }),
-              ["claude", "opencode-go", "zen-free", "codex", "gemini", "gemini-daily", "cursor", "fireworks"])
+              ["claude", "opencode-go", "zen-free", "codex", "cursor", "gemini", "gemini-daily", "fireworks"])
       root.eq(Model.limitChoices(providers)[0], { id: "claude", name: "CLAUDE", harness: "claude" })
     } catch (e) { root.threw(e) }
     root.done()
@@ -1599,6 +1600,9 @@ Harness {
   id: root
   Service { id: svc }
   property var workspaceAnswer: null
+  property var findAnswers: []
+  property int findSuperseded: 0
+  property string findRefused: ""
   readonly property double today: Model.localMidnight(Date.now())
   property int step: 0
   function dayAt(n) { var d = new Date(root.today); d.setDate(d.getDate() + n); return d.getTime() }
@@ -1703,11 +1707,37 @@ Harness {
           svc.setLimitsShown(["claude", "claude"], function (res) {})
           root.eq(Recorder.of("settings-set").length, sets)
           svc.setLimitsShown("auto", null)
+          // The folder search and the folder check carry their words and folder on stdin; a search
+          // that waits behind another is replaced by a newer one.
+          Recorder.answers["find-dirs"] = function (args, stdin) {
+            var asked = JSON.parse(stdin)
+            return { ok: true, q: asked.q, entries: [], truncated: false, reason: null, scanned: 0, skipped: 0 }
+          }
+          var onFound = function (res) {
+            if (res.code === "superseded") root.findSuperseded++
+            else root.findAnswers = root.findAnswers.concat([res.q])
+          }
+          svc.findDirs("last", [], onFound)
+          svc.findDirs("last ma", [], onFound)
+          svc.findDirs("last man", ["/home/u/code", "relative"], onFound)
+          svc.findDirs("", [], function (res) { root.findRefused = String(res.code) })
+          Recorder.answers["folder"] = function (args, stdin) { return { ok: true, path: JSON.parse(stdin).path, real: null, state: "ok", reason: null } }
+          svc.checkFolder("/home/u/code", function (res) {})
           // No project is made through the write lane, after the settings writes above.
           Recorder.answers["workspace"] = function (args) { return { ok: true, path: "/home/u/AutoPilot", exists: args.length === 1, created: args.length === 1 } }
           svc.loadWorkspace(true, function (res) { root.workspaceAnswer = res })
         } else if (s === 3) {
           root.eq(root.last("workspace").args, ["--create"])
+          // Whatever ran first, the newest search is answered and nothing it replaced ever is.
+          var ran = Recorder.of("find-dirs").map(function (c) { return JSON.parse(c.stdin).q })
+          root.eq(ran[ran.length - 1], "last man")
+          root.eq(root.findAnswers[root.findAnswers.length - 1], "last man")
+          root.eq(root.findAnswers.length + root.findSuperseded, 3)
+          root.check(root.findAnswers.every(function (q) { return ran.indexOf(q) >= 0 }), "only searches that ran are answered")
+          root.eq(root.findRefused, "bad_args")
+          var newest = Recorder.of("find-dirs")[Recorder.of("find-dirs").length - 1]
+          root.eq([newest.args, JSON.parse(newest.stdin)], [[], { q: "last man", known: ["/home/u/code"] }])
+          root.eq([root.last("folder").args, JSON.parse(root.last("folder").stdin)], [[], { path: "/home/u/code" }])
           root.eq([svc.sessions["in"]["in"], svc.dirs["/home/u"].entries[0].name, svc.dirs["/home/u/link"].path, svc.dirs["/home/u/real"].path],
                   ["/home/u/proj", "api", "/home/u/real", "/home/u/real"])
           root.eq([Recorder.of("dirs").filter(function (c) { return JSON.parse(c.stdin).path === "/home/u/code" }).length, svc.dirs["/home/u/code"].hidden], [2, true])
@@ -1732,6 +1762,6 @@ Harness {
   }
 }
 QML
-run_case "$S" Payload.qml "service_payload_v2_fields: allowPaid, provider and sessionPath reach the helper, sessions --cwd and --in, dirs, workspace, models, timeline days"
+run_case "$S" Payload.qml "service_payload_v2_fields: allowPaid, provider and sessionPath reach the helper, sessions --cwd and --in, dirs, workspace, folder, find-dirs (newest wins), models, timeline days"
 
 finish
