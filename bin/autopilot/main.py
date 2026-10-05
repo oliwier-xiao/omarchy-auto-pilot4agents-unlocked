@@ -34,6 +34,7 @@ VERBS = {
     "sessions": ("cli_scan", "cmd_sessions", False),
     "dirs": ("cli_scan", "cmd_dirs", False),
     "workspace": ("cli_scan", "cmd_workspace", False),
+    "folder": ("cli_scan", "cmd_folder", True),
     "usage": ("cli_scan", "cmd_usage", False),
     "timeline": ("cli_scan", "cmd_timeline", False),
     "agents": ("cli_scan", "cmd_agents", False),
@@ -48,7 +49,7 @@ _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _GEN_RE = re.compile(r"^[0-9]{1,6}$")
 
 _NO_ARGS = ("edition", "list", "job-create", "preview", "cancel-all", "reconcile", "settings-get",
-            "settings-set", "usage")
+            "settings-set", "usage", "folder")
 _ONE_ID = ("job-get", "job-update", "job-delete", "disarm", "copy-resume")
 
 

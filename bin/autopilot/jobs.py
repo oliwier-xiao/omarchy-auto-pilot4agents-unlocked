@@ -302,30 +302,52 @@ def _under(path, root):
 
 def check_cwd(path):
     """The realpath of an allowed working folder, or invalid_cwd."""
-    if not _abs_path_ok(path, consts.CWD_MAX_BYTES):
+    real, reason = cwd_verdict(path)
+    if reason is not None:
         raise ApError("invalid_cwd", "target.cwd")
+    return real
+
+
+def cwd_verdict(path):
+    """(realpath, None) for an allowed working folder, else (realpath or None, reason).
+
+    The one place the working folder rule lives; check_cwd turns any reason into invalid_cwd,
+    and the folder picker turns it into a sentence before a job is ever drafted. Reasons:
+    unclean, root, home, system, plugin, missing, denied, not_dir, not_own, shared, config.
+    """
+    if not _abs_path_ok(path, consts.CWD_MAX_BYTES):
+        return None, "unclean"
     real = os.path.realpath(path)
     home = os.path.realpath(fsio.home())
-    refused = real == "/" or real == home
+    if real == "/":
+        return real, "root"
+    if real == home:
+        return real, "home"
     if not _under(real, home) and any(real.startswith(prefix) for prefix in REFUSED_CWD_PREFIXES):
-        refused = True
+        return real, "system"
     if _under(real, fsio.plugin_dir()) or _under(real, os.path.realpath(home + "/.config/omarchy/plugins")):
-        refused = True
-    if refused or not _abs_path_ok(real, consts.CWD_MAX_BYTES):
-        raise ApError("invalid_cwd", "target.cwd")
+        return real, "plugin"
+    if not _abs_path_ok(real, consts.CWD_MAX_BYTES):
+        return None, "unclean"
     try:
         st = os.stat(real)
+    except (FileNotFoundError, NotADirectoryError):
+        return real, "missing"
     except OSError:
-        raise ApError("invalid_cwd", "target.cwd") from None
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
-        raise ApError("invalid_cwd", "target.cwd")
+        return real, "denied"
+    if not stat.S_ISDIR(st.st_mode):
+        return real, "not_dir"
+    if st.st_uid != os.getuid():
+        return real, "not_own"
     # Writable by anyone but this user, the folder is theirs to fill: a job fires with nobody
     # present, and the agent loads whatever hooks, allow rules, MCP servers and instructions it
     # finds there. So the folder, and the agent configuration already in it, must be this user's
     # alone. Checked when a job is created and again when it fires.
-    if st.st_mode & 0o022 or not _agent_config_private(real):
-        raise ApError("invalid_cwd", "target.cwd")
-    return real
+    if st.st_mode & 0o022:
+        return real, "shared"
+    if not _agent_config_private(real):
+        return real, "config"
+    return real, None
 
 
 def _private_entry(path):

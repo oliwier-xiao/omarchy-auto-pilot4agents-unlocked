@@ -13,8 +13,14 @@ import "../lib/Model.js" as Model
 //     picked), All recent sessions, the folders that have sessions lately, and the folder
 //     tree of the home folder, read one folder at a time through `ap4a dirs`. Each folder
 //     carries the marks of the agents that have sessions in it.
-//   - Sessions, on the right: what the chosen place holds. Row 0 starts a new session
-//     there; Enter resumes the highlighted session and Ctrl+F forks it.
+//   - Sessions, on the right: what the chosen place holds, under one large New session
+//     button that starts a new session there (cursor row 0). Enter resumes the highlighted
+//     session and Ctrl+F forks it.
+//
+// A new session starts only in a folder the helper has looked at (`ap4a folder`): one that
+// exists and that a job may run in. A typed path that is not there turns the list into the
+// folders it most likely means (another case, a letter off, a path from / meant from ~), and
+// Enter on one fills it in, so New session is never offered for a folder that is not there.
 //
 // The place on the right follows the left cursor when the keyboard moves it, and a click.
 // Hover only moves the highlight, so passing the pointer over the tree never re-reads.
@@ -76,6 +82,14 @@ Item {
   property real _px: -1
   property real _py: -1
   property bool _pointerKnown: false
+  // Folder checks answered since the sheet opened, path -> {state: ok|missing|refused|unknown,
+  // reason}, and the ones on their way, path -> true.
+  property var _checks: ({})
+  property var _checking: ({})
+  // A new session that waits for its folder's check: {cwd, harness, gen}, or null.
+  property var _pendingNew: null
+  // Folders a typed path's walk asked the tree to read, so each is asked once per open.
+  property var _walkAsked: ({})
 
   function pointerMoved(item, x, y) {
     var p = item.mapToItem(null, x, y)
@@ -100,7 +114,9 @@ Item {
     git: "\uDB80\uDEA2",          // md-git                        U+F02A2
     link: "\uDB80\uDF39",         // md-link_variant               U+F0339
     lock: "\uDB80\uDF41",         // md-lock_outline               U+F0341
-    check: "\uDB80\uDD2C"         // md-check                      U+F012C
+    check: "\uDB80\uDD2C",        // md-check                      U+F012C
+    plus: "\uDB81\uDC15",         // md-plus                       U+F0415
+    alert: "\uDB80\uDC28"         // md-alert_circle               U+F0028
   })
 
   readonly property string hints: root.focusPane === "places"
@@ -189,9 +205,27 @@ Item {
     return out
   }
 
-  readonly property int rowCount: root.rows.length + 1
-  readonly property string newHarness: root.filter !== "all" ? root.filter
-    : (Edition.HARNESS_IDS.indexOf(root.initialHarness) >= 0 ? root.initialHarness : Edition.HARNESS_IDS[0])
+  // Row 0 is the New session button; the rows after it are the sessions, or the folders a
+  // typed path that is not there most likely means.
+  readonly property int rowCount: (root.suggesting ? root.suggestions.length : root.rows.length) + 1
+  // The agent a new session here starts with: the chosen filter, else the draft's own agent,
+  // else the agent of the newest session in this place, else the default agent in Settings.
+  // The button names it, so nobody starts an agent they did not mean to.
+  readonly property string newHarness: {
+    if (root.filter !== "all") return root.filter
+    if (Edition.HARNESS_IDS.indexOf(root.initialHarness) >= 0) return root.initialHarness
+    var newest = null
+    for (var i = 0; i < root.placeRows.length; i++) {
+      var r = root.placeRows[i]
+      if (r && Edition.HARNESS_IDS.indexOf(r.harness) >= 0 && !root.agentBlocked(r.harness)
+          && (newest === null || (Number(r.updatedAtMs) || 0) > (Number(newest.updatedAtMs) || 0))) newest = r
+    }
+    if (newest !== null) return newest.harness
+    var preferred = root.service && root.service.settings ? String(root.service.settings.defaultHarness || "") : ""
+    if (Edition.HARNESS_IDS.indexOf(preferred) >= 0 && !root.agentBlocked(preferred)) return preferred
+    for (var k = 0; k < Edition.HARNESS_IDS.length; k++) if (!root.agentBlocked(Edition.HARNESS_IDS[k])) return Edition.HARNESS_IDS[k]
+    return Edition.HARNESS_IDS[0]
+  }
   readonly property string newCwd: root.activePath !== "" ? root.activePath : (root.initialCwd !== "" ? root.initialCwd : root.home)
 
   // cwd -> {total, by: {harness: n}}, over the recent rows and every folder list read.
@@ -540,6 +574,7 @@ Item {
       return root.workspaceExists ? "For work without a project. Agents start here and keep their files here."
         : "For work without a project. Made when you start a session here; agents keep their files in it."
     }
+    if (root.queryPath !== "" && root.newState === "missing" && root.placeRows.length === 0) return "Not there: no folder by this name."
     var parts = []
     if (root.activeEntry && root.activeEntry.git === true) parts.push("git")
     if (root.activeEntry && root.activeEntry.own === false) parts.push("owned by another user, agents cannot start here")
@@ -547,6 +582,224 @@ Item {
     if (root.folderFailed) parts.push("its own list could not be read, the recent sessions here are shown")
     else parts.push(root.folderLoading && n === 0 ? "reading sessions…" : (n === 1 ? "1 session" : n + " sessions"))
     return parts.join("  ·  ")
+  }
+
+  // ---------------------------------------------------------------- the new session
+
+  readonly property bool canCheck: !!root.service && typeof root.service.checkFolder === "function"
+  readonly property var newCheck: root.newCwd !== "" && root._checks.hasOwnProperty(root.newCwd) ? root._checks[root.newCwd] : null
+
+  // What New session here would meet: "ok", "checking", "missing", "refused", "home" (the
+  // home folder itself) or "none" (no folder chosen yet).
+  readonly property string newState: {
+    var cwd = root.newCwd
+    if (cwd === "" || cwd === root.home) return root.activeKind === "home" ? "home" : "none"
+    if (cwd === root.workspacePath) return root.workspaceRefused ? "refused" : "ok"
+    if (root.refusalFor(cwd) !== "") return "refused"
+    if (cwd === root.queryPath && root.walk.exists === false) return "missing"
+    var c = root.newCheck
+    if (c === null) return root.canCheck ? "checking" : "ok"
+    return c.state === "unknown" ? "ok" : c.state
+  }
+
+  // The one line under New session: where it starts, or why it cannot.
+  readonly property string newLine: {
+    var where = Model.shortPath(root.newCwd, root.home)
+    if (root.newState === "none") return "Pick a folder on the left, type a path such as ~/code/api, or choose No project."
+    if (root.newState === "home") return "Not in your home folder itself. Pick a folder inside it, or No project."
+    if (root.newCwd === root.workspacePath)
+      return root.workspaceRefused ? root.workspaceRefusal : "in " + where + ", no project needed"
+    if (root.newState === "missing" || root.newState === "refused") {
+      var own = root.refusalFor(root.newCwd)
+      if (own !== "") return own
+      if (root.newCheck !== null) return root.checkSentence(root.newCwd, root.newCheck)
+      return where + " does not exist."
+    }
+    return "in " + where
+  }
+
+  readonly property bool newReady: root.newState === "ok" || root.newState === "checking"
+
+  // The sentence for a folder check that said no: the fact, then the way out.
+  function checkSentence(cwd, c) {
+    var where = Model.shortPath(cwd, root.home)
+    var reason = c && typeof c.reason === "string" ? c.reason : ""
+    if (reason === "missing") return where + " does not exist. Pick a folder of yours, or type its path."
+    if (reason === "not_dir") return where + " is a file, not a folder. Pick a folder."
+    if (reason === "home") return "Your home folder itself is not allowed. Pick a folder inside it, or No project."
+    if (reason === "root") return "The root folder is not allowed. Pick a folder inside your home folder, or No project."
+    if (reason === "system") return where + " is a shared system folder, so no agent runs there. Pick a folder of yours."
+    if (reason === "plugin") return "Plugin folders are not allowed. Pick another folder."
+    if (reason === "not_own") return where + " belongs to another user, so no agent starts there. Pick a folder of yours."
+    if (reason === "shared") return "Others can write to " + where + ", so no agent runs there unattended. chmod go-w " + where + " fixes that."
+    if (reason === "config") return "Agent settings in " + where + " can be changed by others, so no agent runs there unattended."
+    if (reason === "denied") return where + " cannot be opened. Pick another folder."
+    if (reason === "unclean") return "That path has characters " + Edition.DISPLAY_NAME + " cannot use. Pick another folder."
+    return where + " cannot be used. Pick another folder."
+  }
+
+  // Asks the helper whether a job may run in path, once per open; a new session waiting for
+  // that answer starts, or says why not, when it lands.
+  function checkFolder(path) {
+    if (!root.canCheck || path === "" || path === root.home || path === root.workspacePath) return
+    if (root._checks.hasOwnProperty(path) || root._checking[path] === true) return
+    var gen = root._openGen
+    var asking = {}
+    for (var k in root._checking) asking[k] = true
+    asking[path] = true
+    root._checking = asking
+    root.service.checkFolder(path, function (res) {
+      if (gen !== root._openGen) return
+      var left = {}
+      for (var a in root._checking) if (a !== path) left[a] = true
+      root._checking = left
+      var c = res && res.ok === true && typeof res.state === "string"
+        ? { state: res.state, reason: typeof res.reason === "string" ? res.reason : "" }
+        : { state: "unknown", reason: "" }
+      var next = {}
+      for (var n in root._checks) next[n] = root._checks[n]
+      next[path] = c
+      root._checks = next
+      var wait = root._pendingNew
+      if (wait === null || wait.cwd !== path || wait.gen !== gen) return
+      root._pendingNew = null
+      if (!root.active) return
+      if (c.state === "ok" || c.state === "unknown") root.finishNew(wait.cwd, wait.harness)
+      else root.noticeRequested(root.checkSentence(path, c), "warn", null)
+    })
+  }
+
+  function dropCheck(path) {
+    if (!root._checks.hasOwnProperty(path)) return
+    var next = {}
+    for (var n in root._checks) if (n !== path) next[n] = root._checks[n]
+    root._checks = next
+  }
+
+  // ---------------------------------------------------------------- a typed path
+
+  // The typed folder, walked through the tree listings read so far: whether it is there, and
+  // when it is not, the folders it most likely means. A path typed from / is also looked for
+  // from ~, since "/Projects" usually means ~/Projects.
+  //   {exists: true | false | null (not known), wait: a folder to read first, hidden, suggestions}
+  readonly property var walk: root.walkPath(root.queryPath)
+  readonly property var suggestions: root.walk.suggestions
+  // A typed folder that is not there, and folders it may mean: they take the list's place.
+  readonly property bool suggesting: root.queryPath !== "" && root.suggestions.length > 0 && root.rows.length === 0
+    && (root.newState === "missing" || root.walk.exists === false)
+
+  function walkPath(p) {
+    var out = { exists: null, wait: "", hidden: false, suggestions: [] }
+    var home = root.home
+    if (p === "" || home === "" || p === home || p === "/" || !root.service || !root.service.dirs) return out
+    var inside = p.indexOf(home + "/") === 0
+    var parts = (inside ? p.slice(home.length + 1) : p.slice(1)).split("/").filter(function (x) { return x !== "" })
+    if (parts.length === 0) return out
+    var dir = home
+    var exact = inside
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i]
+      var wantHidden = part.charAt(0) === "."
+      var d = root.service.dirs[dir]
+      if (!d || d.ok !== true || (wantHidden && d.hidden !== true)) {
+        out.wait = dir
+        out.hidden = wantHidden
+        return out
+      }
+      if (d.state !== "ok" || !Array.isArray(d.entries)) return out
+      var entries = d.entries.filter(function (e) {
+        return e && typeof e.name === "string" && (e.link !== true || typeof e.target === "string")
+          && (e.hidden !== true || wantHidden)
+      })
+      var hit = null, folded = []
+      for (var j = 0; j < entries.length; j++) {
+        if (entries[j].name === part) hit = entries[j]
+        else if (entries[j].name.toLowerCase() === part.toLowerCase()) folded.push(entries[j])
+      }
+      if (hit === null && folded.length === 1) {
+        hit = folded[0]
+        exact = false
+      }
+      var complete = inside && d.truncated !== true
+      if (hit !== null && i < parts.length - 1) {
+        dir = dir + "/" + hit.name
+        continue
+      }
+      if (hit !== null && exact) {
+        out.exists = true
+        return out
+      }
+      out.suggestions = hit !== null ? [dir + "/" + hit.name]
+        : root.nearNames(entries, part).map(function (e) { return dir + "/" + e.name })
+      if (complete) out.exists = false
+      return out
+    }
+    return out
+  }
+
+  // Up to six names in entries that part most likely means: the same name in another case,
+  // names that start with it, names that hold it, then names a letter or two off.
+  function nearNames(entries, part) {
+    var want = part.toLowerCase()
+    var limit = want.length <= 4 ? 1 : (want.length <= 8 ? 2 : 3)
+    var scored = []
+    for (var i = 0; i < entries.length; i++) {
+      var name = entries[i].name.toLowerCase()
+      var score = -1
+      if (name === want) score = 0
+      else if (want !== "" && name.indexOf(want) === 0) score = 1
+      else if (want.length >= 3 && name.indexOf(want) > 0) score = 2
+      else if (want.length >= 2) {
+        var dist = root.editDistance(name, want, limit)
+        if (dist <= limit) score = 2 + dist
+      }
+      if (score >= 0) scored.push({ entry: entries[i], score: score })
+    }
+    scored.sort(function (a, b) {
+      if (a.score !== b.score) return a.score - b.score
+      if (a.entry.name.length !== b.entry.name.length) return a.entry.name.length - b.entry.name.length
+      return a.entry.name < b.entry.name ? -1 : (a.entry.name > b.entry.name ? 1 : 0)
+    })
+    return scored.slice(0, 6).map(function (x) { return x.entry })
+  }
+
+  // Levenshtein distance, given up past limit (returns limit + 1).
+  function editDistance(a, b, limit) {
+    if (Math.abs(a.length - b.length) > limit || a.length > 64 || b.length > 64) return limit + 1
+    var prev = []
+    for (var j = 0; j <= b.length; j++) prev.push(j)
+    for (var i = 1; i <= a.length; i++) {
+      var cur = [i]
+      var best = i
+      for (var k = 1; k <= b.length; k++) {
+        var v = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + (a.charAt(i - 1) === b.charAt(k - 1) ? 0 : 1))
+        cur.push(v)
+        if (v < best) best = v
+      }
+      if (best > limit) return limit + 1
+      prev = cur
+    }
+    return prev[b.length]
+  }
+
+  // The walk needs a folder the tree has not read yet: read it, once per open.
+  onWalkChanged: {
+    var w = root.walk
+    if (!root.active || w.wait === "" || !root.service || typeof root.service.loadDirs !== "function") return
+    var key = w.wait + (w.hidden ? " hidden" : "")
+    if (root._walkAsked[key] === true) return
+    var asked = {}
+    for (var k in root._walkAsked) asked[k] = true
+    asked[key] = true
+    root._walkAsked = asked
+    var wait = w.wait, hidden = w.hidden || root.showHidden
+    Qt.callLater(function () { if (root.active) root.service.loadDirs(wait, hidden) })
+  }
+
+  // A suggestion taken: its path fills the search, and the list shows that folder.
+  function acceptSuggestion(path) {
+    if (typeof path !== "string" || path === "") return
+    root.editQuery(Model.shortPath(path, root.home))
   }
 
   // ---------------------------------------------------------------- helpers
@@ -615,7 +868,8 @@ Item {
   }
 
   function resetCursor() {
-    root.cursor = root.queryPath === "" && root.rows.length > 0 ? 1 : 0
+    if (root.suggesting) root.cursor = 1
+    else root.cursor = root.queryPath === "" && root.rows.length > 0 ? 1 : 0
   }
 
   function open(args) {
@@ -635,6 +889,10 @@ Item {
     root._making = false
     root._pointerKnown = false
     root._rowKey = ""
+    root._checks = ({})
+    root._checking = ({})
+    root._pendingNew = null
+    root._walkAsked = ({})
     var opened = {}
     if (root.home !== "") opened[root.home] = true
     root.expanded = opened
@@ -715,7 +973,7 @@ Item {
   }
 
   function pickFork() {
-    if (root.cursor > 0) root.pickSession(root.rows[root.cursor - 1], "fork")
+    if (root.cursor > 0 && !root.suggesting) root.pickSession(root.rows[root.cursor - 1], "fork")
     else root.noticeRequested("Ctrl+F forks the highlighted session. Pick one with ↑/↓ first.", "warn", null)
   }
 
@@ -727,7 +985,7 @@ Item {
     if (fromRow && root.focusPane === "places") {
       var p = root.placeOf(root.leftRows[root.leftCursor])
       if (p !== null && p.path !== "") cwd = p.path
-    } else if (fromRow && root.cursor > 0) {
+    } else if (fromRow && root.cursor > 0 && !root.suggesting) {
       var r = root.rows[root.cursor - 1]
       if (r) {
         cwd = String(r.cwd || "")
@@ -769,12 +1027,34 @@ Item {
       })
       return
     }
+    if (cwd === root.queryPath && root.walk.exists === false && !root._checks.hasOwnProperty(cwd)) {
+      root.noticeRequested(root.checkSentence(cwd, { reason: "missing" }), "warn", null)
+      return
+    }
+    // Only a folder the helper has looked at: it exists, and a job may run there. A no from
+    // earlier in this open is asked again, since the folder may have been fixed meanwhile.
+    var c = root._checks.hasOwnProperty(cwd) ? root._checks[cwd] : null
+    if (c !== null && c.state !== "ok" && c.state !== "unknown") {
+      root.dropCheck(cwd)
+      c = null
+    }
+    // No project has its own check (`workspace`), made above or answered when the sheet opened.
+    if (c === null && root.canCheck && cwd !== root.workspacePath) {
+      root._pendingNew = { cwd: cwd, harness: harness, gen: root._openGen }
+      root.checkFolder(cwd)
+      return
+    }
+    root.finishNew(cwd, harness)
+  }
+
+  function finishNew(cwd, harness) {
     root.picked({ harness: harness, mode: "new", sessionId: null, cwd: cwd,
                   title: cwd === root.workspacePath ? "No project" : root.basename(cwd), sessionPath: null })
   }
 
   function pickCursor() {
     if (root.cursor <= 0) root.pickNew(false)
+    else if (root.suggesting) root.acceptSuggestion(root.suggestions[root.cursor - 1])
     else root.pickSession(root.rows[root.cursor - 1], "resume")
   }
 
@@ -789,7 +1069,7 @@ Item {
   function setCursorByHand(index) {
     root._cursorTouched = true
     root.cursor = Math.max(0, Math.min(root.rowCount - 1, index))
-    root._rowKey = root.cursor > 0 ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
+    root._rowKey = root.cursor > 0 && !root.suggesting ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
   }
 
   function moveCursor(delta) { root.setCursorByHand(root.cursor + delta) }
@@ -853,14 +1133,20 @@ Item {
 
   // Scrolled once the views have the new rows: a jump that also adds rows lands past the old end.
   onCursorChanged: {
-    root._rowKey = root.cursor > 0 ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
-    Qt.callLater(function () { if (list.count > root.cursor) list.positionViewAtIndex(root.cursor, ListView.Contain) })
+    root._rowKey = root.cursor > 0 && !root.suggesting ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
+    Qt.callLater(function () {
+      if (root.cursor === 0) list.positionViewAtBeginning()
+      else if (list.count > root.cursor - 1) list.positionViewAtIndex(root.cursor - 1, ListView.Contain)
+    })
   }
   onLeftCursorChanged: {
     root._leftKey = root.leftKeyOf(root.leftRows[root.leftCursor])
     Qt.callLater(function () { if (tree.count > root.leftCursor) tree.positionViewAtIndex(root.leftCursor, ListView.Contain) })
   }
   onQueryPathChanged: if (root.active && root.queryPath !== "") cwdReload.restart()
+  onNewCwdChanged: if (root.active) checkTimer.restart()
+  onActiveChanged: if (root.active) checkTimer.restart()
+  onSuggestingChanged: if (!root._cursorTouched) root.resetCursor()
   onLeftRowsChanged: {
     var lost = ""
     if (root._leftKey !== "" && root.leftKeyOf(root.leftRows[root.leftCursor]) !== root._leftKey) {
@@ -896,6 +1182,14 @@ Item {
       while (i > 0 && !root.leftTakesCursor(root.leftRows[i])) i--
       root.leftCursor = Math.max(0, i)
     }
+  }
+
+  // The place's folder is checked once the cursor or the typing rests on it.
+  Timer {
+    id: checkTimer
+    interval: 200
+    repeat: false
+    onTriggered: if (root.active && root.newCwd !== root.home && root.newCwd.charAt(0) === "/") root.checkFolder(root.newCwd)
   }
 
   Timer {
@@ -947,20 +1241,10 @@ Item {
     anchors.top: parent.top
     height: Style.space(28)
 
-    Text {
-      anchors.left: parent.left
-      anchors.verticalCenter: parent.verticalCenter
-      textFormat: Text.PlainText
-      text: "Where to run"
-      color: root.theme.strong
-      font.family: root.theme.fontFamily
-      font.pixelSize: root.theme.type.title
-      font.bold: true
-    }
-
+    // Back first, as in every desktop window: the way out sits where the eye starts.
     ActionButton {
       id: backButton
-      anchors.right: parent.right
+      anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       theme: root.theme
       hasCursor: backButton.hovered
@@ -968,6 +1252,21 @@ Item {
       text: "Back"
       shortcut: "Esc"
       onClicked: root.close()
+    }
+
+    Text {
+      anchors.left: backButton.right
+      anchors.leftMargin: Style.space(12)
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: "Where to run"
+      color: root.theme.strong
+      font.family: root.theme.fontFamily
+      font.pixelSize: root.theme.type.title
+      font.bold: true
+      elide: Text.ElideRight
+      maximumLineCount: 1
     }
   }
 
@@ -1320,13 +1619,170 @@ Item {
       }
     }
 
-    Flow {
-      id: filterRow
+    // Starting fresh is the one action this pane leads with, so it is a large button of its
+    // own above the sessions: nobody has to read the list to find it. It names the folder and
+    // the agent, or says why no session can start here.
+    Item {
+      id: newButton
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: placeHead.bottom
       anchors.topMargin: Style.spacing.lg
+      height: Style.space(52)
+      readonly property bool cursorHere: root.focusPane === "list" && root.cursor === 0
+      readonly property bool ready: root.newReady
+      readonly property bool showAgent: newButton.ready && root.newState !== "none"
+
+      function hovered(x, y) {
+        if (!root.pointerMoved(newButton, x, y)) return
+        root.focusPane = "list"
+        root.setCursorByHand(0)
+      }
+
+      BorderSurface {
+        anchors.fill: parent
+        radius: Style.cornerRadius
+        color: newButton.ready
+          ? Util.alpha(root.theme.accent, newButton.cursorHere ? 0.40 : 0.20)
+          : Util.alpha(root.theme.fg, newButton.cursorHere ? 0.08 : 0.04)
+        // The border follows the cursor only, so the button never reads as a second highlight.
+        borderSpec: Border.controlSpec(newButton.cursorHere ? "hover-cursor" : "normal", root.theme.fg, root.theme.accent)
+      }
+
+      // The plus in a disc of its own, so the button reads as "add" before a word is read.
+      Rectangle {
+        id: plusDisc
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(12)
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(28)
+        height: width
+        radius: width / 2
+        color: newButton.ready ? Util.alpha(root.theme.accent, newButton.cursorHere ? 0.75 : 0.55) : Util.alpha(root.theme.fg, 0.08)
+
+        Text {
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: root.glyph.plus
+          color: newButton.ready ? root.theme.fg : root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.glyphLarge
+        }
+      }
+
+      Text {
+        id: newTitle
+        anchors.left: plusDisc.right
+        anchors.leftMargin: Style.space(12)
+        anchors.right: newAgent.left
+        anchors.rightMargin: Style.space(12)
+        anchors.top: parent.top
+        anchors.topMargin: Style.space(8)
+        textFormat: Text.PlainText
+        text: "New session"
+        color: newButton.ready ? root.theme.fg : root.theme.soft
+        elide: Text.ElideRight
+        maximumLineCount: 1
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.title
+        font.bold: true
+      }
+
+      Text {
+        anchors.left: newTitle.left
+        anchors.right: newKey.left
+        anchors.rightMargin: Style.space(12)
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Style.space(8)
+        textFormat: Text.PlainText
+        text: root.newLine
+        color: newButton.ready || root.newState === "none" ? root.theme.readable : root.theme.warnInk
+        elide: Text.ElideMiddle
+        maximumLineCount: 1
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.meta
+      }
+
+      // Which agent it starts: its mark and name, in its own ink. ←/→ (the agent filter) changes it.
+      Row {
+        id: newAgent
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(12)
+        anchors.top: parent.top
+        anchors.topMargin: Style.space(9)
+        spacing: Style.space(6)
+        visible: newButton.showAgent
+
+        AgentMark {
+          anchors.verticalCenter: parent.verticalCenter
+          theme: root.theme
+          agent: root.newHarness
+          size: Style.space(14)
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: Model.harnessName(root.newHarness)
+          color: root.theme.harnessInk(root.newHarness)
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.body
+        }
+      }
+
+      Text {
+        id: newKey
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(12)
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Style.space(8)
+        visible: newButton.showAgent
+        textFormat: Text.PlainText
+        text: newButton.cursorHere ? (root.filter === "all" ? "Enter start  ·  ←/→ agent" : "Enter start") : "Ctrl+N"
+        color: newButton.cursorHere ? root.theme.accentInk : root.theme.soft
+        font.family: root.theme.fontFamily
+        font.pixelSize: root.theme.type.meta
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onEntered: newButton.hovered(mouseX, mouseY)
+        onPositionChanged: function (mouse) { newButton.hovered(mouse.x, mouse.y) }
+        onClicked: {
+          root.focusPane = "list"
+          root.setCursorByHand(0)
+          root.pickNew(false)
+        }
+      }
+    }
+
+    // The way into a typed folder that is not there: the folders it most likely means.
+    Text {
+      id: suggestHead
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: newButton.bottom
+      anchors.topMargin: Style.spacing.lg
+      visible: root.suggesting
+      textFormat: Text.PlainText
+      text: "Did you mean one of these folders? Enter fills it in."
+      color: root.theme.strong
+      elide: Text.ElideRight
+      maximumLineCount: 1
+      font.family: root.theme.fontFamily
+      font.pixelSize: root.theme.type.body
+    }
+
+    Flow {
+      id: filterRow
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: newButton.bottom
+      anchors.topMargin: Style.spacing.lg
       spacing: Style.space(6)
+      visible: !root.suggesting
 
       Repeater {
         model: root.filters
@@ -1354,26 +1810,29 @@ Item {
       id: list
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.top: filterRow.bottom
+      anchors.top: root.suggesting ? suggestHead.bottom : filterRow.bottom
       anchors.topMargin: Style.spacing.lg
       // Whole rows only, so the last one is never cut through.
       height: Math.floor(Math.max(0, rightPane.height - list.y) / Style.space(34)) * Style.space(34)
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      model: root.rowCount
+      model: root.rowCount - 1
 
+      // Row i of the list is cursor row i + 1: row 0 is the New session button above.
       delegate: Item {
         id: row
         required property int index
-        readonly property var session: row.index > 0 ? root.rows[row.index - 1] : null
-        readonly property bool cursorHere: root.focusPane === "list" && root.cursor === row.index
+        readonly property int slot: row.index + 1
+        readonly property string suggestion: root.suggesting && row.index < root.suggestions.length ? root.suggestions[row.index] : ""
+        readonly property var session: !root.suggesting && row.index < root.rows.length ? root.rows[row.index] : null
+        readonly property bool cursorHere: root.focusPane === "list" && root.cursor === row.slot
         readonly property bool chosen: row.session !== null && root.initialSessionId !== "" && row.session.id === root.initialSessionId
         readonly property bool showFolder: row.session !== null && root.activeKind === "recent"
 
         function hovered(x, y) {
           if (!root.pointerMoved(row, x, y)) return
           root.focusPane = "list"
-          root.setCursorByHand(row.index)
+          root.setCursorByHand(row.slot)
         }
         width: list.width
         height: Style.space(34)
@@ -1409,24 +1868,31 @@ Item {
         }
 
         Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(14)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: row.suggestion !== ""
+          textFormat: Text.PlainText
+          text: root.glyph.folder
+          color: row.cursorHere ? root.theme.accentInk : root.theme.soft
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.glyph
+        }
+
+        Text {
           id: rowTitle
           anchors.left: parent.left
           anchors.leftMargin: Style.space(38)
           anchors.verticalCenter: parent.verticalCenter
           width: row.session
             ? (row.showFolder ? parent.width * 0.40 : parent.width - Style.space(38) - metaRow.width - Style.space(16))
-            : parent.width - Style.space(160)
+            : parent.width - Style.space(38) - metaRow.width - Style.space(16)
           textFormat: Text.PlainText
           text: {
             if (row.session) return row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13)
-            if (root.activeKind === "home") return "+ New session: pick a folder inside ~, or No project"
-            if (root.activeKind === "recent" && (root.newCwd === "" || root.newCwd === root.home))
-              return "+ New session: type a folder path"
-            return "+ New session in " + Model.shortPath(root.newCwd, root.home)
-              + (root.filter === "all" ? " (" + Model.harnessName(root.newHarness) + ")" : "")
+            return Model.shortPath(row.suggestion, root.home)
           }
-          color: row.cursorHere ? root.theme.fg
-            : (row.session ? root.theme.strong : (root.activeKind === "home" ? root.theme.soft : root.theme.readable))
+          color: row.cursorHere ? root.theme.fg : root.theme.strong
           elide: Text.ElideRight
           maximumLineCount: 1
           font.family: root.theme.fontFamily
@@ -1484,7 +1950,7 @@ Item {
             width: Style.space(52)
             horizontalAlignment: Text.AlignRight
             textFormat: Text.PlainText
-            text: row.chosen ? root.glyph.check + " now" : (row.session ? "resume" : "new")
+            text: row.chosen ? root.glyph.check + " now" : (row.session ? "resume" : "go to")
             color: row.chosen ? root.theme.okInk : (row.cursorHere ? root.theme.accentInk : root.theme.soft)
             font.family: root.theme.fontFamily
             font.pixelSize: root.theme.type.meta
@@ -1499,7 +1965,7 @@ Item {
           onPositionChanged: function (mouse) { row.hovered(mouse.x, mouse.y) }
           onClicked: {
             root.focusPane = "list"
-            root.cursor = row.index
+            root.cursor = row.slot
             root.pickCursor()
           }
         }
@@ -1508,19 +1974,20 @@ Item {
       Text {
         anchors.left: parent.left
         anchors.leftMargin: Style.space(38)
-        y: Style.space(34) + Style.space(12)
+        y: Style.space(10)
         width: parent.width - Style.space(50)
-        visible: root.rows.length === 0 && !root.noMatch
+        visible: root.rows.length === 0 && !root.noMatch && !root.suggesting
         textFormat: Text.PlainText
         text: {
           if (root.loading) return "Reading sessions…"
           if (root.activeKind === "home") return "Sessions started in ~ itself cannot be resumed here."
           if (root.activeKind !== "recent" && root.folderLoading) return "Reading the sessions of " + Model.shortPath(root.activePath, root.home) + "…"
-          if (root.folderFailed) return "This folder's sessions could not be read. Enter starts a new one."
+          if (root.queryPath !== "" && root.newState === "missing") return "No folder by that name here. Check the path, or pick a folder on the left."
+          if (root.folderFailed) return "This folder's sessions could not be read. New session above starts one."
           if (root.result === null) return "Sessions could not be read."
           if (root.activeKind === "recent") return "No sessions to resume here. Start a new one above."
           return "No sessions here in the last " + (typeof root.result.limitDays === "number" ? root.result.limitDays : 90)
-            + " days. Enter starts a new one."
+            + " days. New session above starts one."
         }
         color: root.loading || root.folderLoading ? root.theme.soft : root.theme.readable
         elide: Text.ElideRight
@@ -1533,7 +2000,7 @@ Item {
       Row {
         anchors.left: parent.left
         anchors.leftMargin: Style.space(38)
-        y: Style.space(34) + Style.space(12)
+        y: Style.space(10)
         width: parent.width - Style.space(50)
         visible: root.rows.length === 0 && root.noMatch
         spacing: Style.space(7)

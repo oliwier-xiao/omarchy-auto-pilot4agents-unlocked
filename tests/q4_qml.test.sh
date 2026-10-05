@@ -51,7 +51,7 @@ expected = {
     "settings-get": (7000, 16384, False, R), "settings-set": (9000, 16384, True, W), "copy-resume": (8000, 16384, False, W),
     "sessions": (13000, 921600, False, R), "usage": (8000, 131072, False, R), "agents": (35000, 65536, False, R),
     "models": (30000, 262144, False, R), "timeline": (9000, 262144, False, R),
-    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W),
+    "dirs": (8000, 262144, False, R), "workspace": (8000, 65536, False, W), "folder": (8000, 65536, True, R),
 }
 bad = sorted(set(rows) ^ set(expected)) + sorted(k for k in rows if k in expected and rows[k] != expected[k])
 if bad:
@@ -388,13 +388,13 @@ Harness {
         p("gemini-daily", { harnesses: ["gemini"], source: "computed" }),
         p("pi", { headlineKey: null })
       ]
-      root.eq(Model.shownSources(providers, "auto"), ["claude", "zen-free", "codex", "gemini-daily", "cursor", "fireworks"])
+      root.eq(Model.shownSources(providers, "auto"), ["claude", "zen-free", "codex", "cursor", "gemini-daily", "fireworks"])
       root.eq(Model.shownSources(providers, undefined), Model.shownSources(providers, "auto"))
       root.eq(Model.shownSources(providers, ["cursor", "nope", "claude", "cursor", "broken", 7]), ["cursor", "claude", "broken"])
       root.eq(Model.shownSources(null, "auto"), [])
       root.eq(Model.shownSources(providers, []), [])
       root.eq(Model.limitChoices(providers).map(function (c) { return c.id }),
-              ["claude", "opencode-go", "zen-free", "codex", "gemini", "gemini-daily", "cursor", "fireworks"])
+              ["claude", "opencode-go", "zen-free", "codex", "cursor", "gemini", "gemini-daily", "fireworks"])
       root.eq(Model.limitChoices(providers)[0], { id: "claude", name: "CLAUDE", harness: "claude" })
     } catch (e) { root.threw(e) }
     root.done()

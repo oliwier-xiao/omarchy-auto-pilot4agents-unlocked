@@ -1,4 +1,4 @@
-"""Tests for the picker's folder reads: `dirs`, `workspace` and `sessions --in`.
+"""Tests for the picker's folder reads: `dirs`, `folder`, `workspace` and `sessions --in`.
 
 Every test runs against a temporary HOME built in code. Nothing here reads the real HOME or
 makes a folder outside the temporary one. Run with PYTHONDONTWRITEBYTECODE=1.
@@ -170,6 +170,67 @@ class DirsTests(ScanCase):
         for verb in ("dirs", "workspace"):
             self.assertIn(verb, main.VERBS)
             self.assertIn(verb, consts.VERB_DEADLINE_S)
+
+
+class FolderCheckTests(ScanCase):
+    """`folder`: whether a job may run in one folder, and why not, before a session is drafted."""
+
+    def check(self, path):
+        answer = cli_scan.cmd_folder([], {"path": path})
+        self.assertTrue(answer["ok"])
+        self.assertEqual(answer["path"], path)
+        return answer["state"], answer["reason"]
+
+    def test_the_same_rule_as_check_cwd_with_its_reason(self):
+        api = self.mkdir("code/api")
+        self.assertEqual(self.check(api), ("ok", None))
+        self.assertEqual(cli_scan.cmd_folder([], {"path": api})["real"], os.path.realpath(api))
+        self.assertEqual(self.check(os.path.join(self.home, "code", "API")), ("missing", "missing"))
+        self.assertEqual(self.check("/Projects-%d-nowhere" % os.getpid()), ("missing", "missing"))
+        self.write("notes.txt", "x")
+        self.assertEqual(self.check(os.path.join(self.home, "notes.txt")), ("missing", "not_dir"))
+        self.assertEqual(self.check(self.home), ("refused", "home"))
+        self.assertEqual(self.check("/"), ("refused", "root"))
+        self.assertEqual(self.check("/run"), ("refused", "system"))
+        shared = self.mkdir("shared")
+        os.chmod(shared, 0o775)
+        self.assertEqual(self.check(shared), ("refused", "shared"))
+        os.chmod(shared, 0o755)
+        self.write("shared/CLAUDE.md", "be kind\n", mode=0o666)
+        self.assertEqual(self.check(shared), ("refused", "config"))
+        # Whatever the reason, check_cwd refuses exactly the folders the check does not pass.
+        for path in (api, shared, self.home, "/", os.path.join(self.home, "notes.txt")):
+            real, reason = folders.jobs.cwd_verdict(path)
+            if reason is None:
+                self.assertEqual(folders.jobs.check_cwd(path), real)
+            else:
+                with self.assertRaises(ApError) as caught:
+                    folders.jobs.check_cwd(path)
+                self.assertEqual(caught.exception.code, "invalid_cwd")
+
+    def test_a_link_is_judged_by_where_it_leads(self):
+        api = self.mkdir("code/api")
+        os.symlink(api, os.path.join(self.home, "api-link"))
+        state, reason = self.check(os.path.join(self.home, "api-link"))
+        self.assertEqual((state, reason), ("ok", None))
+        os.symlink(self.home, os.path.join(self.home, "home-link"))
+        self.assertEqual(self.check(os.path.join(self.home, "home-link")), ("refused", "home"))
+
+    def test_folder_argv_and_payload(self):
+        main.check_argv("folder", [])
+        self.assertIn("folder", main.VERBS)
+        self.assertTrue(main.VERBS["folder"][2], "it reads its folder from stdin")
+        self.assertIn("folder", consts.VERB_DEADLINE_S)
+        for argv in (["--path", self.home], ["--stdin"], [self.home]):
+            with self.assertRaises(main._ArgError):
+                main.check_argv("folder", argv)
+            with self.assertRaises(ApError):
+                cli_scan.cmd_folder(argv, {"path": self.home})
+        for payload in (None, {}, {"path": "relative"}, {"path": self.home, "x": 1}, {"path": self.home + "/\n"},
+                        {"path": 7}, {"cwd": self.home}):
+            with self.assertRaises(ApError, msg=payload) as caught:
+                cli_scan.cmd_folder([], payload)
+            self.assertEqual(caught.exception.code, "bad_args")
 
 
 class WorkspaceTests(ScanCase):

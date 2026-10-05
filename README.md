@@ -93,7 +93,7 @@ Codex must be signed in with `codex login`, Cursor Agent with `cursor-agent logi
 
 1. Click the Auto Pilot icon in the bar. A right click opens the panel straight on Compose.
 2. Write the prompt.
-3. Press `Tab` to reach **Send to**, then `Enter` to open **Where to run**. Pick a session, press `Tab` and pick a folder from the tree, or pick **No project** for work that needs no repository.
+3. Press `Tab` to reach **Send to**, then `Enter` to open **Where to run**. Pick a session, press `Tab` and pick a folder from the tree, or pick **No project** for work that needs no repository. A new draft has no agent and no session yet: picking a session or a folder chooses both, and arming before that says what is missing.
 4. Press `Tab` to reach **When** and pick the moment: `k` for 5 minutes later, `r` for the next reset, or type `1405` and press `Enter` for 14:05.
 5. Read the **Will run** line, then press `Ctrl+Enter` to arm.
 
@@ -108,9 +108,11 @@ The job waits in the Queue (`Ctrl+2`), the bar counts down to it, and a notifica
   - **All recent sessions** is every agent's newest sessions, across folders.
   - **Recent folders** are the folders with the newest sessions.
   - The folder tree starts at your home folder and never goes above it. A git checkout carries a git mark, and a folder with sessions carries each agent's mark and how many sessions it has there.
-- **Sessions**, on the right: what the chosen place holds, newest first. Row 0 starts a new session there. `Enter` resumes the highlighted session and `Ctrl+F` forks it. The session the draft already uses is marked.
+- **Sessions**, on the right: what the chosen place holds, newest first, under a large **New session** button that starts a new session there. The button names the folder and the agent it starts: the agent filter you chose, else the draft's agent, else the agent of the newest session in that folder, else the default agent in the settings. `Left/Right` changes it. `Enter` resumes the highlighted session and `Ctrl+F` forks it. The session the draft already uses is marked.
 
 The right pane follows the folder the keyboard moves to, or the one you click. A chosen folder's own list is read for every agent, so it also shows sessions older than the newest 50 of All recent sessions. Typing filters the sessions; typing a folder path such as `~/code/api` opens the tree down to it.
+
+A new session starts only in a folder that is there and that a job may run in. The helper checks the folder as soon as the cursor rests on it, and the button says why when it cannot be used: the folder does not exist, it is a file, others can write to it, or agent settings in it can be changed by others. A typed path that is not there lists the folders it most likely means instead of sessions: the same name in another case, a name a letter or two off, or `~/Projects` for `/Projects`. `Enter` fills one in.
 
 Your home folder itself is never a working folder. It can be browsed, and the sheet says so instead of offering a session there: pick a folder inside it, or No project. Hidden folders are not even read by name until `Ctrl+H`.
 
@@ -325,8 +327,8 @@ With the mouse, drop a job on another job to swap their times, or on a day to mo
 | type | filter the sessions, or type a folder path |
 | `Tab` | move between the sessions and the folders |
 | `Up/Down` | choose |
-| `Left/Right` | agent, in the sessions; close or open a folder, in the folders |
-| `Enter` | resume the session, or start a new one on row 0; in the folders, go to its sessions |
+| `Left/Right` | agent, in the sessions (also the agent New session starts); close or open a folder, in the folders |
+| `Enter` | resume the session, start a new one on **New session**, or fill in a suggested folder; in the folders, go to its sessions |
 | `Ctrl+F` | fork the highlighted session |
 | `Ctrl+N` | new session in that folder |
 | `Ctrl+H` | show or hide hidden folders |
@@ -501,7 +503,7 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 
 Every read is size-capped, does not follow links and keeps only the fields listed. The folder tree is the one place that resolves a link, only to tell whether it leads to a folder inside your home folder, and it never opens one.
 
-- **Read:** the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` or `~/.cursor` (its approval and network settings); `.claude/settings.json` in the git root of a Cursor job's folder (whether it has allow rules); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores Where to run lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only); for the folder tree, the names of the subfolders of one folder of your home folder at a time (hidden ones only after `Ctrl+H`), whether each has a `.git` entry (looked at with lstat, never opened), and who owns the folder a link leads to when that folder is inside your home folder.
+- **Read:** the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` or `~/.cursor` (its approval and network settings); `.claude/settings.json` in the git root of a Cursor job's folder (whether it has allow rules); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores Where to run lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only); before a new session in a folder, that folder's owner and mode and those of the agent configuration entries directly in it, the same check a job gets when it is armed; for the folder tree, the names of the subfolders of one folder of your home folder at a time (hidden ones only after `Ctrl+H`), whether each has a `.git` entry (looked at with lstat, never opened), and who owns the folder a link leads to when that folder is inside your home folder.
 - **Looked at, never opened:** `.cursor/cli.json` in a Cursor job's folder and its parents; `~/.cursor/projects/<folder>/.workspace-trusted`; Cursor chat folders and their `store.db-wal` times; `opencode.json`, `opencode.jsonc` and `.opencode/` in an OpenCode job's folder.
 - **Never opened:** `~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/models.json`, `~/.local/share/opencode/auth.json`, `~/.config/cursor/auth.json`, Cursor's `state.vscdb` and chat databases, and Gemini's sign-in files. No command that prints a key or a token is ever run.
 - **Checks it runs without a prompt**, with the agent's own environment and a time and size limit: `codex login status`, `pi auth check --provider <provider> --json --no-refresh`, `cursor-agent status` (only whether it is signed in is kept), and the model listings under [Models](#models).

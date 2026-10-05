@@ -95,6 +95,15 @@ def cmd_dirs(argv, payload):
     return dict({"ok": True}, **folders.list_dirs(args[1], hidden=len(args) == 3))
 
 
+def cmd_folder(argv, payload):
+    """folder -> whether a job may run in the folder given as {"path": <abs>} on stdin, and why not."""
+    if argv:
+        raise ApError("bad_args")
+    if not isinstance(payload, dict) or set(payload) != {"path"} or not _cwd_ok(payload["path"]):
+        raise ApError("bad_args")
+    return dict({"ok": True}, **folders.check_folder(payload["path"]))
+
+
 def cmd_workspace(argv, payload):
     """workspace [--create] -> the No project folder, made first with --create."""
     if argv and argv != ["--create"]:

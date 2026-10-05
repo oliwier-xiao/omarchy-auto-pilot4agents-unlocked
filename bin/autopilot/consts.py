@@ -99,7 +99,7 @@ VERB_DEADLINE_S = {"edition": 2, "list": 4, "job-get": 4, "job-create": 8, "job-
                    "preview": 12, "arm": 40, "run-now": 40, "disarm": 25, "cancel-all": 90, "reschedule": 25,
                    "swap": 40, "shift": 85, "reconcile": 60, "settings-get": 2, "settings-set": 4,
                    "copy-resume": 3, "sessions": 8, "usage": 3, "agents": 30, "models": 25, "timeline": 4,
-                   "dirs": 3, "workspace": 3}
+                   "dirs": 3, "workspace": 3, "folder": 3}
 
 USAGE_RECORDS_MAX = 32
 USAGE_RESET_HORIZON_S = 45 * 86400

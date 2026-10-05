@@ -271,6 +271,8 @@ Item {
     "sessions":     { ms: 13000, cap: 921600, stdin: false, lane: "read",  mutates: false },
     "dirs":         { ms: 8000,  cap: 262144, stdin: false, lane: "read",  mutates: false },
     "workspace":    { ms: 8000,  cap: 65536,  stdin: false, lane: "write", mutates: false },
+    // Each folder is its own read: the folder is the payload, so it is part of the key.
+    "folder":       { ms: 8000,  cap: 65536,  stdin: true,  lane: "read",  mutates: false, keyed: true },
     "usage":        { ms: 8000,  cap: 131072, stdin: false, lane: "read",  mutates: false },
     "agents":       { ms: 35000, cap: 65536,  stdin: false, lane: "read",  mutates: false },
     "models":       { ms: 30000, cap: 262144, stdin: false, lane: "read",  mutates: false },
@@ -382,6 +384,18 @@ Item {
   function clearDirs() { root._dirs = ({}) }
 
   // The No project folder; `create` makes it first. cb(res) gets the answer either way.
+  // Whether a job may run in one folder, before a new session is drafted there (`ap4a folder`,
+  // the folder on stdin). cb gets {ok, path, real, state: ok|missing|refused, reason}.
+  function checkFolder(path, cb) {
+    if (!root._validCwd(path)) {
+      if (typeof cb === "function") Qt.callLater(function () { cb({ ok: false, code: "bad_args", message: "That is not a folder path." }) })
+      return
+    }
+    root._request("folder", [], { "path": path }, function (res) {
+      if (typeof cb === "function") cb(res)
+    })
+  }
+
   function loadWorkspace(create, cb) {
     root._request("workspace", create === true ? ["--create"] : [], null, function (res) {
       if (res.ok === true) root._workspace = { path: res.path, exists: res.exists === true, refused: res.refused === true }
@@ -821,7 +835,8 @@ Item {
       // A sessions read for one folder is not the same read as one for another, now that the
       // folder is on stdin rather than in the arguments the key is made of.
       key: verb + " " + argv.join(" ")
-        + (argv.length > 0 && argv[argv.length - 1] === "--stdin" && payload ? " " + JSON.stringify(payload) : "")
+        + ((spec.keyed === true || (argv.length > 0 && argv[argv.length - 1] === "--stdin")) && payload
+          ? " " + JSON.stringify(payload) : "")
     }
     if (spec.lane === "read") root._requestRead(req)
     else root._requestWrite(req, front === true)

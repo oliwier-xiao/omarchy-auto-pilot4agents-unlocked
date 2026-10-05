@@ -751,12 +751,12 @@ class DispatcherTests(Sandbox):
              "resetTrigger": "zen_free_reset", "resetTriggers": ["zen_free_reset", "go_window_reset"]},
             {"id": "codex", "name": "Codex", "cliName": "codex", "canFork": True, "gated": False,
              "resetTrigger": "codex_window_reset", "resetTriggers": ["codex_window_reset"]},
-            {"id": "gemini", "name": "Gemini CLI", "cliName": "gemini", "canFork": False, "gated": False,
-             "resetTrigger": "gemini_daily_reset", "resetTriggers": ["gemini_daily_reset"]},
             {"id": "cursor", "name": "Cursor Agent", "cliName": "cursor-agent", "canFork": False, "gated": False,
              "resetTrigger": None, "resetTriggers": []},
             {"id": "pi", "name": "Pi", "cliName": "pi", "canFork": True, "gated": False,
-             "resetTrigger": "codex_window_reset", "resetTriggers": ["codex_window_reset"]}])
+             "resetTrigger": "codex_window_reset", "resetTriggers": ["codex_window_reset"]},
+            {"id": "gemini", "name": "Gemini CLI", "cliName": "gemini", "canFork": False, "gated": False,
+             "resetTrigger": "gemini_daily_reset", "resetTriggers": ["gemini_daily_reset"]}])
         self.assertEqual(obj["caps"], {"promptBytes": 65536, "labelChars": 40, "titleChars": 120, "maxTurns": [1, 200],
                                        "budgetUsd": [0.1, 100.0], "runtimeSec": [300, 14400], "marginSec": [60, 540],
                                        "horizonSec": 691200, "uiMinLeadSec": 60, "shiftMaxIds": 50,
@@ -1820,7 +1820,7 @@ class V2CoreTests(Sandbox):
         return self.home + "/.pi/agent/sessions/--proj--/2026-09-15T10-00-00-000Z_" + sid + ".jsonl"
 
     def test_edition_v2_harnesses_levels_unavailable(self):
-        self.assertEqual(edition.HARNESS_IDS, ("claude", "opencode", "codex", "gemini", "cursor", "pi"))
+        self.assertEqual(edition.HARNESS_IDS, ("claude", "opencode", "codex", "cursor", "pi", "gemini"))
         for level in edition.LEVELS:
             present, missing = set(level["harness"]), set(level["unavailable"])
             self.assertEqual(present | missing, set(edition.HARNESS_IDS), level["id"])
