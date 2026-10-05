@@ -1635,31 +1635,40 @@ Harness {
           root.eq(root.last("preview").deadlineMs, 17000)
 
           svc.loadSessions("pi", "/home/u/proj")
-          root.eq(root.last("sessions").args, ["--harness", "pi", "--cwd", "/home/u/proj"])
+          // The folder goes on stdin: a command line is readable by every account.
+          root.eq(root.last("sessions").args, ["--harness", "pi", "--stdin"])
+          root.eq(JSON.parse(root.last("sessions").stdin), { cwd: "/home/u/proj" })
           svc.loadSessions("claude")
           root.eq(root.last("sessions").args, ["--harness", "claude"])
           svc.loadSessions("gemini", "relative/dir")
           root.eq(root.last("sessions").args, ["--harness", "gemini"])
 
           // The picker's folder reads: one folder's sessions, one folder's subfolders, No project.
-          Recorder.answers["sessions"] = function (args) {
-            return args[0] === "--in" ? { ok: true, harness: null, sessions: [], counts: {}, "in": args[1], cwd: args[1] } : { ok: false, code: "stub", message: "Stub answer." }
+          // Every folder goes to the helper on stdin, never as an argument.
+          Recorder.answers["sessions"] = function (args, stdin) {
+            var asked = {}
+            try { asked = JSON.parse(stdin) } catch (e) {}
+            return args[0] === "--stdin" && asked["in"] ? { ok: true, harness: null, sessions: [], counts: {}, "in": asked["in"], cwd: asked["in"] } : { ok: false, code: "stub", message: "Stub answer." }
           }
           svc.loadFolderSessions("/home/u/proj")
-          root.eq(root.last("sessions").args, ["--in", "/home/u/proj"])
+          root.eq(root.last("sessions").args, ["--stdin"])
+          root.eq(JSON.parse(root.last("sessions").stdin), { "in": "/home/u/proj" })
           var folderReads = Recorder.of("sessions").length
           svc.loadFolderSessions("relative/dir")
           root.eq(Recorder.of("sessions").length, folderReads, "a relative folder is never asked for")
-          Recorder.answers["dirs"] = function (args) {
-            return { ok: true, path: args[1] === "/home/u/link" ? "/home/u/real" : args[1], home: "/home/u", state: "ok",
+          Recorder.answers["dirs"] = function (args, stdin) {
+            var asked = JSON.parse(stdin).path
+            return { ok: true, path: asked === "/home/u/link" ? "/home/u/real" : asked, home: "/home/u", state: "ok",
                      entries: [ { name: "api", hidden: false, git: true, own: true, link: false, target: null } ], truncated: false,
-                     hidden: args[2] === "--hidden" }
+                     hidden: args[0] === "--hidden" }
           }
           svc.loadDirs("/home/u")
-          root.eq([root.last("dirs").args, root.last("dirs").deadlineMs, root.last("dirs").cap], [["--path", "/home/u"], 8000, 262144 + 1024])
+          root.eq([root.last("dirs").args, root.last("dirs").deadlineMs, root.last("dirs").cap], [["--stdin"], 8000, 262144 + 1024])
+          root.eq(JSON.parse(root.last("dirs").stdin), { path: "/home/u" })
           svc.loadDirs("/home/u/link")
           svc.loadDirs("/home/u/code", true)
-          root.eq(root.last("dirs").args, ["--path", "/home/u/code", "--hidden"])
+          root.eq(root.last("dirs").args, ["--hidden", "--stdin"])
+          root.eq(JSON.parse(root.last("dirs").stdin), { path: "/home/u/code" })
           // A plain read answered after a read with hidden names never replaces it.
           svc.loadDirs("/home/u/code")
           var dirReads = Recorder.of("dirs").length
@@ -1701,7 +1710,7 @@ Harness {
           root.eq(root.last("workspace").args, ["--create"])
           root.eq([svc.sessions["in"]["in"], svc.dirs["/home/u"].entries[0].name, svc.dirs["/home/u/link"].path, svc.dirs["/home/u/real"].path],
                   ["/home/u/proj", "api", "/home/u/real", "/home/u/real"])
-          root.eq([Recorder.of("dirs").filter(function (c) { return c.args[1] === "/home/u/code" }).length, svc.dirs["/home/u/code"].hidden], [2, true])
+          root.eq([Recorder.of("dirs").filter(function (c) { return JSON.parse(c.stdin).path === "/home/u/code" }).length, svc.dirs["/home/u/code"].hidden], [2, true])
           root.eq([svc.workspace, root.workspaceAnswer && root.workspaceAnswer.created], [{ path: "/home/u/AutoPilot", exists: true, refused: false }, true])
           svc.clearDirs()
           root.eq(svc.dirs, {})

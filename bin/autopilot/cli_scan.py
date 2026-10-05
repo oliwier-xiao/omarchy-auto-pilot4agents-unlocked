@@ -36,10 +36,11 @@ def _state_or_none():
 
 
 def cmd_sessions(argv, payload):
-    """sessions [--harness <harness>] [--cwd <abs> | --in <abs>] -> Sessions v2 (delta 3.12).
+    """sessions [--harness <harness>] [--cwd <abs> | --in <abs> | --stdin] -> Sessions v2 (delta 3.12).
 
     --cwd scopes Pi to one folder and leaves every other agent as it is; --in answers only the
-    sessions recorded in that one folder, for every agent.
+    sessions recorded in that one folder, for every agent. With --stdin either arrives on stdin, as
+    {"cwd": <abs>} or {"in": <abs>} (or {} for neither), never in argv.
     """
     args = list(argv or [])
     harness = cwd = only = None
@@ -56,6 +57,17 @@ def cmd_sessions(argv, payload):
         else:
             only = args[1]
         args = args[2:]
+    elif args[:1] == ["--stdin"]:
+        if not isinstance(payload, dict) or set(payload) - {"cwd", "in"} or len(payload) > 1:
+            raise ApError("bad_args")
+        for key, value in payload.items():
+            if not _cwd_ok(value):
+                raise ApError("bad_args")
+            if key == "cwd":
+                cwd = value
+            else:
+                only = value
+        args = args[1:]
     if args:
         raise ApError("bad_args")
     extra = {}
@@ -68,8 +80,16 @@ def cmd_sessions(argv, payload):
 
 
 def cmd_dirs(argv, payload):
-    """dirs --path <abs> [--hidden] -> the subfolders of one folder inside the home folder."""
+    """dirs (--path <abs> [--hidden] | [--hidden] --stdin) -> the subfolders of one folder in the home folder.
+
+    With --stdin the folder arrives as {"path": <abs>} on stdin: the panel walks the user's own
+    folders, and a command line is readable by every account on the computer.
+    """
     args = list(argv or [])
+    if args in (["--stdin"], ["--hidden", "--stdin"]):
+        if not isinstance(payload, dict) or set(payload) != {"path"} or not _cwd_ok(payload["path"]):
+            raise ApError("bad_args")
+        return dict({"ok": True}, **folders.list_dirs(payload["path"], hidden=args[0] == "--hidden"))
     if len(args) not in (2, 3) or args[0] != "--path" or not _cwd_ok(args[1]) or args[2:] not in ([], ["--hidden"]):
         raise ApError("bad_args")
     return dict({"ok": True}, **folders.list_dirs(args[1], hidden=len(args) == 3))

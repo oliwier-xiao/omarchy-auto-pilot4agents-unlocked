@@ -533,7 +533,13 @@ else
   deny "units/no-enabled-units" "systemctl is never asked to enable, link, preset or mask" \
        '"(enable|reenable|link|preset|mask|edit)"' bin/autopilot/systemd.py
   deny "helper/no-credential-files" "no agent credential file named" '\.credentials\.json|auth\.json|oauth_creds'
-  deny "helper/no-network" "no network client in the helper" 'api\.anthropic\.com|urllib\.request|http\.client|^\s*import socket|from socket import'
+  deny "helper/no-network" "no network client in the helper" 'api\.anthropic\.com|urllib\.request|http\.client|^\s*import socket|from socket import' \
+       $(ls bin/ap4a bin/autopilot/*.py | grep -v '/sessionbus\.py$')
+  # The one socket: a notification goes to the session bus over its Unix socket, so that its text
+  # is never a program's argument. Local only, never an address family that leaves the machine.
+  deny "helper/session-bus-local-only" "sessionbus.py opens only a Unix socket" \
+       'AF_INET|AF_INET6|create_connection|getaddrinfo|gethostbyname|SOCK_DGRAM|socketpair|tcp:' bin/autopilot/sessionbus.py
+  need "helper/session-bus-unix" "sessionbus.py connects with AF_UNIX" 'socket\.AF_UNIX'
   deny "helper/no-usage-collector" "never runs the usage collector" 'omarchy-agent-usage'
 fi
 for t in mkfifo st_nlink RecursionError symlink canary; do

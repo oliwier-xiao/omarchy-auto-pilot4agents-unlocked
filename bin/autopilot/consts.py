@@ -174,7 +174,6 @@ SHIFT_RANGE_S = 604800
 TOOLS = {
     "systemd_run": "/usr/bin/systemd-run",
     "systemctl": "/usr/bin/systemctl",
-    "busctl": "/usr/bin/busctl",
     "qs": "/usr/bin/qs",
     "timedatectl": "/usr/bin/timedatectl",
     "node": "/usr/bin/node",

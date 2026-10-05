@@ -324,24 +324,30 @@ Item {
   }
 
   // `cwd` (optional, absolute) scopes Pi's sessions to one folder; the answer is stored
-  // under the same key either way.
+  // under the same key either way. The folder goes to the helper on stdin (`--stdin`),
+  // never as an argument: a command line is readable by every account on the computer.
   function loadSessions(harness, cwd) {
     var h = typeof harness === "string" ? harness : ""
     if (h !== "" && !root._knownHarness(h)) return
     var key = h === "" ? "all" : h
     var args = h === "" ? [] : ["--harness", h]
-    if (root._validCwd(cwd)) args = args.concat(["--cwd", cwd])
-    root._request("sessions", args, null, function (res) {
+    var payload = null
+    if (root._validCwd(cwd)) {
+      args = args.concat(["--stdin"])
+      payload = { cwd: cwd }
+    }
+    root._request("sessions", args, payload, function (res) {
       if (res.ok !== true) { root._noteReadError(res); return }
       root._sessions = root._with(root._sessions, key, res)
     })
   }
 
-  // The sessions recorded in one folder, for every agent (`sessions --in`), stored under
-  // "in"; the answer names its folder, so a picker can tell a late answer from the current one.
+  // The sessions recorded in one folder, for every agent (`sessions --in`, the folder sent on
+  // stdin), stored under "in"; the answer names its folder, so a picker can tell a late answer
+  // from the current one.
   function loadFolderSessions(path) {
     if (!root._validCwd(path)) return
-    root._request("sessions", ["--in", path], null, function (res) {
+    root._request("sessions", ["--stdin"], { "in": path }, function (res) {
       if (res.ok !== true) {
         root._noteReadError(res)
         res = { "ok": false, "in": path, "code": res.code, "message": res.message }
@@ -355,7 +361,9 @@ Item {
   // resolved it elsewhere, under its real path too.
   function loadDirs(path, hidden) {
     if (!root._validCwd(path)) return
-    root._request("dirs", ["--path", path].concat(hidden === true ? ["--hidden"] : []), null, function (res) {
+    // The folder goes on stdin: these are the user's own folders, one per step of the walk,
+    // and a command line is readable by every account on the computer.
+    root._request("dirs", (hidden === true ? ["--hidden"] : []).concat(["--stdin"]), { "path": path }, function (res) {
       // A plain read that lands after a read with hidden names never replaces it: the picker
       // filters hidden names itself, and asked for them because it shows them.
       var held = root._dirs[path]
@@ -810,7 +818,10 @@ Item {
       args: argv,
       payload: payload === undefined ? null : payload,
       cbs: typeof cb === "function" ? [cb] : [],
+      // A sessions read for one folder is not the same read as one for another, now that the
+      // folder is on stdin rather than in the arguments the key is made of.
       key: verb + " " + argv.join(" ")
+        + (argv.length > 0 && argv[argv.length - 1] === "--stdin" && payload ? " " + JSON.stringify(payload) : "")
     }
     if (spec.lane === "read") root._requestRead(req)
     else root._requestWrite(req, front === true)
@@ -931,6 +942,11 @@ Item {
     return env
   }
 
+  // A verb that always reads stdin, or one asked to with a trailing --stdin (sessions).
+  function _takesStdin(spec, argv) {
+    return spec.stdin === true || (argv.length > 0 && argv[argv.length - 1] === "--stdin")
+  }
+
   function _spawn(req, done) {
     var spec = root._verbs[req.verb]
     var proc = processComponent.createObject(root, {
@@ -939,7 +955,7 @@ Item {
       deadlineMs: spec.ms,
       maxStdoutBytes: spec.cap + 1024,
       maxStderrBytes: 4096,
-      stdinText: spec.stdin ? JSON.stringify(req.payload || {}) + "\n" : ""
+      stdinText: root._takesStdin(spec, req.args) ? JSON.stringify(req.payload || {}) + "\n" : ""
     })
     if (!proc) {
       Qt.callLater(function () { done(root._qmlError("helper_failed")) })

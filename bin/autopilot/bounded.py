@@ -1,4 +1,4 @@
-"""Bounded supervision for the short tool calls the helper makes (systemctl, busctl, qs, ...).
+"""Bounded supervision for the short tool calls the helper makes (systemctl, systemd-run, qs, ...).
 
 Every child runs in its own session, with an explicit environment and an absolute argv[0].
 Both pipes are drained by one poll loop into byte-capped buffers, so a flooding child is

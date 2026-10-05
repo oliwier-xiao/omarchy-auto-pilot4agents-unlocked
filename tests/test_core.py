@@ -454,7 +454,7 @@ class Sandbox(unittest.TestCase):
         os.environ.update(HOME=self.home, USER="tester", XDG_RUNTIME_DIR=self.runtime)
         self.p = Patch()
         self.p.set(consts, "XDG_RUNTIME_RE", re.compile("^" + re.escape(self.runtime) + "$"))
-        for key, name in (("systemd_run", "systemd-run"), ("systemctl", "systemctl"), ("busctl", "busctl"),
+        for key, name in (("systemd_run", "systemd-run"), ("systemctl", "systemctl"),
                           ("qs", "qs"), ("timedatectl", "timedatectl")):
             self.p.item(consts.TOOLS, key, os.path.join(STUBS, name))
         self.p.set(consts, "TOOL_OWNER_UIDS", (0, UID))
@@ -927,9 +927,9 @@ class StateTests(Sandbox):
 
     def test_system_tools_must_be_root_owned(self):
         self.p.set(consts, "TOOL_OWNER_UIDS", (0,))
-        res = bounded.run_bounded([consts.TOOLS["busctl"], "--user"], env={}, deadline_s=5)
+        res = bounded.run_bounded([consts.TOOLS["systemctl"], "--user"], env={}, deadline_s=5)
         self.assertEqual(res["error"], "untrusted_tool")
-        self.assertEqual(self.calls("busctl"), [])
+        self.assertEqual(self.calls("systemctl"), [])
         fsio.check_tool("/usr/bin/systemctl")
         # Quickshell is the plugin's dependency, not a CI runner's: where it is installed its binary
         # has to pass the same check, and where it is not there is nothing at that path to check.
@@ -1550,7 +1550,7 @@ class SchedulingTests(Sandbox):
 
     def test_list_has_no_prompt_text(self):
         # No label is given and the canary opens the prompt: a label taken from the prompt would carry it
-        # into list output and the notification body (busctl argv). The generated label is metadata only.
+        # into list output and the notification body. The generated label is metadata only.
         canary = "CANARY-" + secrets.token_hex(12)
         prompt = canary + " check the nightly build.\nThen summarize it."
         created = self.create(prompt=prompt)
@@ -2244,12 +2244,15 @@ class V2CoreTests(Sandbox):
     def test_argv_grammar_cwd_models_timeline(self):
         accepted = [("sessions", []), ("sessions", ["--harness", "pi"]), ("sessions", ["--cwd", self.project]),
                     ("sessions", ["--harness", "cursor", "--cwd", "/home/u/my proj"]),
+                    ("sessions", ["--stdin"]), ("sessions", ["--harness", "pi", "--stdin"]),
                     ("models", ["--harness", "opencode"]), ("models", ["--harness", "pi", "--refresh"]),
                     ("timeline", ["--from", "1789430400", "--to", "1789516800"]), ("usage", [])]
         refused = [("sessions", ["--cwd", "relative"]), ("sessions", ["--cwd", "/a\nb"]),
                    ("sessions", ["--cwd", "/" + "a" * 1024]), ("sessions", ["--cwd", "/x", "--harness", "pi"]),
                    ("sessions", ["--cwd", "/x", "--cwd", "/y"]), ("sessions", ["--harness", "pi", "--harness", "pi"]),
                    ("sessions", ["--cwd"]), ("sessions", ["--harness", "vim"]), ("sessions", ["--cwd", "/x\x07"]),
+                   ("sessions", ["--stdin", "--cwd", "/x"]), ("sessions", ["--cwd", "/x", "--stdin"]),
+                   ("sessions", ["--stdin", "--stdin"]), ("sessions", ["--stdin", "--harness", "pi"]),
                    ("models", []), ("models", ["--harness"]), ("models", ["--harness", "vim"]),
                    ("models", ["--refresh", "--harness", "pi"]), ("models", ["--harness", "pi", "--refresh", "--refresh"]),
                    ("models", ["--harness", "pi", "--all"]), ("timeline", []), ("timeline", ["--from", "1789430400"]),

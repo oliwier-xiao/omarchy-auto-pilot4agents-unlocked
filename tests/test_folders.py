@@ -149,6 +149,17 @@ class DirsTests(ScanCase):
             with self.assertRaises(main._ArgError):
                 main.check_argv("dirs", argv)
         main.check_argv("dirs", ["--path", self.home])
+        # The panel's form: the folder on stdin, never in argv.
+        main.check_argv("dirs", ["--stdin"])
+        main.check_argv("dirs", ["--hidden", "--stdin"])
+        self.assertEqual(names(cli_scan.cmd_dirs(["--stdin"], {"path": self.home})), ["code"])
+        self.assertEqual(cli_scan.cmd_dirs(["--hidden", "--stdin"], {"path": self.home})["hidden"], True)
+        for argv, payload in ((["--stdin"], None), (["--stdin"], {}), (["--stdin"], {"path": "relative"}),
+                              (["--stdin"], {"path": self.home, "x": 1}), (["--stdin", "--hidden"], {"path": self.home}),
+                              (["--stdin"], {"path": self.home + "/\n"}), (["--path", self.home, "--stdin"], {"path": self.home})):
+            with self.assertRaises(ApError, msg=(argv, payload)) as caught:
+                cli_scan.cmd_dirs(argv, payload)
+            self.assertEqual(caught.exception.code, "bad_args")
         main.check_argv("workspace", [])
         main.check_argv("workspace", ["--create"])
         for argv in (["--make"], ["--create", "--create"]):
@@ -348,6 +359,14 @@ class SessionsInTests(ScanCase):
             with self.assertRaises(main._ArgError):
                 main.check_argv("sessions", argv)
         main.check_argv("sessions", ["--harness", "pi", "--in", "/w/x"])
+        # The panel's form: {"in": ...} on stdin.
+        main.check_argv("sessions", ["--stdin"])
+        result = cli_scan.cmd_sessions(["--harness", "gemini", "--stdin"], {"in": "/w/x"})
+        self.assertEqual(result["in"], "/w/x")
+        for payload in ({"in": "/w/x", "cwd": "/w/x"}, {"in": "relative"}, {"in": 1}, {"where": "/w/x"}):
+            with self.assertRaises(ApError, msg=payload) as caught:
+                cli_scan.cmd_sessions(["--stdin"], payload)
+            self.assertEqual(caught.exception.code, "bad_args")
         for value in ("relative", "/w/\x00", "/" + "d" * 2000):
             with self.assertRaises(ApError) as caught:
                 sessions.list_sessions(None, self.now, only=value)

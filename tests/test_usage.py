@@ -1070,6 +1070,28 @@ class TimelineTests(UsageCase):
             self.assertEqual(caught.exception.code, "bad_args", argv)
         self.assertEqual(calls, [])
 
+    def test_sessions_verb_takes_the_folder_on_stdin(self):
+        # The panel's form: the folder never reaches the helper's arguments.
+        calls = []
+        self.patch(sessions, "list_sessions", lambda harness_id, now, **kw: calls.append((harness_id, kw)) or {
+            "harness": harness_id, "sessions": [], "counts": {}, "truncated": False, "errors": []})
+        good = ((["--stdin"], {"cwd": "/w/My Projekt ż"}, (None, {"cwd": "/w/My Projekt ż"})),
+                (["--harness", "pi", "--stdin"], {"cwd": "/home/u/proj"}, ("pi", {"cwd": "/home/u/proj"})),
+                (["--harness", "pi", "--stdin"], {}, ("pi", {})))
+        for argv, payload, expected in good:
+            del calls[:]
+            cli_scan.cmd_sessions(argv, payload)
+            self.assertEqual(calls, [expected], argv)
+        bad = ((["--stdin"], None), (["--stdin"], []), (["--stdin"], {"cwd": "rel"}), (["--stdin"], {"cwd": "/w\n"}),
+               (["--stdin"], {"cwd": "/w", "x": 1}), (["--stdin"], {"cwd": 5}), (["--stdin", "--cwd", "/w"], {}),
+               (["--cwd", "/w", "--stdin"], {}), (["--stdin", "--stdin"], {}))
+        del calls[:]
+        for argv, payload in bad:
+            with self.assertRaises(ApError, msg=(argv, payload)) as caught:
+                cli_scan.cmd_sessions(argv, payload)
+            self.assertEqual(caught.exception.code, "bad_args", (argv, payload))
+        self.assertEqual(calls, [])
+
 
 class SettingsTests(UsageCase):
     def test_settings_v2_keys(self):

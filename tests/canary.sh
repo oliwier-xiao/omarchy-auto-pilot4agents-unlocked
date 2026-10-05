@@ -1,5 +1,6 @@
 #!/bin/bash
-# tests/canary.sh: the prompt travels only on stdin, end to end.
+# tests/canary.sh: the prompt travels only on stdin, end to end, and the working folder and a job's
+# label are never on a command line.
 #
 # A random canary prompt goes through preview, job-create, list, arm (the stub systemd-run fires the
 # job at once, so the runner and the stub agent start from that call) and job-get, with stub tools
@@ -93,7 +94,7 @@ tools_json = os.path.join(conf, "tools.json")
 cand_json = os.path.join(conf, "candidates.json")
 write_json(tools_json, {
     "systemd_run": os.path.join(stubs, "systemd-run"), "systemctl": os.path.join(stubs, "systemctl"),
-    "busctl": os.path.join(stubs, "busctl"), "qs": os.path.join(stubs, "qs"),
+    "qs": os.path.join(stubs, "qs"),
     "timedatectl": os.path.join(stubs, "timedatectl"), "node": os.path.join(TMP, "no-node"),
 })
 # Discovery only ever sees the sandbox: no real agent CLI can be picked up.
@@ -116,18 +117,35 @@ agent_log = os.path.join(home, "fake-agent.log")
 write_json(os.path.join(home, ".fake-agent.json"), {"mode": "done", "log": agent_log})
 write_json(os.path.join(home, ".config", "omarchy", "shell.json"),
            {"bar": {"layout": {"left": [], "center": [], "right": [edition.PLUGIN_ID]}}})
-project = os.path.join(home, "proj")
+# The project folder carries a marker of its own. A folder is private (it names the project), and
+# a job without a label is labelled from it, so the marker also reaches every notification body.
+folder_mark = "FOLDER-" + secrets.token_hex(4)
+folder_needle = folder_mark.encode()
+project = os.path.join(home, "proj-" + folder_mark)
 os.makedirs(project, exist_ok=True)
+
+# A private session bus at the runtime folder's bus socket, with a stand-in notification server:
+# a notification goes over the bus's socket, so this is where it can be seen arriving.
+sys.path.insert(0, os.path.join(REPO, "tests", "support"))
+bus = bus_proc = None
+if os.access("/usr/bin/dbus-daemon", os.X_OK):
+    import mockbus  # noqa: E402
+    bus_proc, _bus_address, bus_sock = mockbus.start_daemon(TMP, os.path.join(runtime, "bus"))
+    bus = mockbus.Notifications(bus_sock)
+    bus.start()
+    if not bus.ready.wait(5):
+        bus = None
 state = os.path.join(home, ".local", "state", "omarchy", edition.STATE_DIR_NAME)
 
 canary = "CANARY-" + secrets.token_hex(16)
 # The canary opens the prompt and the draft has no label, so a label taken from the prompt's
-# first line would carry it into list output, the notification body and busctl's argv.
+# first line would carry it into list output and the notification body.
 prompt = canary + " Read the build log, then tell me what broke.\nKeep it short."
 needle = canary.encode()
 
 # ---------------------------------------------------------------- /proc scanner for the whole run
 leaks = set()
+folder_leaks = set()
 phase = ["setup"]
 rounds = [0]
 stop_scan = threading.Event()
@@ -146,6 +164,9 @@ def scan_every_process():
                     continue
                 if needle in data:
                     leaks.add("/proc/%s/%s during %s" % (name, part, phase[0]))
+                if part == "cmdline" and folder_needle in data:
+                    folder_leaks.add("/proc/%s/cmdline during %s: %s" % (
+                        name, phase[0], data.replace(b"\0", b" ").decode("utf-8", "replace")[:200]))
         rounds[0] += 1
 
 
@@ -269,7 +290,14 @@ except (OSError, ValueError):
 unit_re = re.compile(r"^--unit=" + re.escape(edition.UNIT_PREFIX) + "-" + re.escape(job_id) + r"-g[0-9]+$")
 expect(any(c["tool"] == "systemd-run" and any(unit_re.match(a) for a in c["argv"]) for c in calls),
        "systemd-run was asked for this job's unit")
-expect(any(c["tool"] == "busctl" and "Done" in c["argv"] for c in calls), "a Done notification was sent")
+if bus is not None:
+    done = [c for c in bus.calls if c[3] == "Done"]
+    expect(bool(done), "a Done notification reached the session bus", json.dumps(bus.calls)[:300])
+    expect(bool(done) and folder_mark in done[0][4] and needle not in done[0][4].encode(),
+           "it names the job by its label, and carries no prompt text", json.dumps(done)[:300])
+else:
+    print("  skip the notification check (no /usr/bin/dbus-daemon)")
+expect(not any(c["tool"] == "busctl" for c in calls), "no notification is sent by a program")
 expect(any(c["tool"] == "qs" and "changed" in c["argv"] for c in calls), "the shell was pinged with changed")
 expect(needle not in json.dumps(calls).encode(), "no tool argv or environment carried the prompt (%d calls)" % len(calls))
 try:
@@ -417,8 +445,9 @@ rc, res, raw = helper("preview", payload=cursor_draft)
 expect(rc == 0 and isinstance(res, dict) and res.get("ok") is True, "cursor: preview answers ok", raw[:300])
 preview = (res or {}).get("preview") or {}
 display = str(preview.get("display", ""))
-expect(display.startswith("cursor-agent -p --output-format stream-json --mode ask --workspace ")
-       and display.endswith("<stdin>"), "cursor: the Will run line is the ask-mode template ending in <stdin>", display)
+expect(display.startswith("cursor-agent -p --output-format stream-json --mode ask")
+       and display.endswith("<stdin>") and folder_mark not in display,
+       "cursor: the Will run line is the ask-mode template ending in <stdin>, without the folder", display)
 gate = preview.get("gate") or {}
 expect(gate.get("code") is None, "cursor: the gate lets a trusted folder through with paid usage off",
        json.dumps(gate))
@@ -449,13 +478,14 @@ if cursor_runs:
            "cursor: the agent received the whole prompt on stdin (sha256 matches)")
     expect(needle not in json.dumps([argv, entry.get("env")]).encode(),
            "cursor: the agent's argv and environment carry no prompt text")
-    placed = all(flag in argv for flag in ("--mode", "--workspace"))
-    expect(placed and argv[argv.index("--mode") + 1] == "ask"
-           and argv[argv.index("--workspace") + 1] == project,
-           "cursor: the agent started in ask mode, in the job's folder", " ".join(argv))
+    expect("--mode" in argv and argv[argv.index("--mode") + 1] == "ask"
+           and os.path.realpath(str(entry.get("cwd"))) == os.path.realpath(project)
+           and not [a for a in argv if folder_mark in a],
+           "cursor: the agent started in ask mode, in the job's folder, which is not an argument",
+           " ".join(argv) + " cwd=" + str(entry.get("cwd")))
     # An allowlist, so any flag Auto Pilot does not build itself (an approval or trust bypass above all)
     # fails here without this file naming one.
-    allowed_flags = {"-p", "--output-format", "--mode", "--sandbox", "--workspace", "--model", "--resume"}
+    allowed_flags = {"-p", "--output-format", "--mode", "--sandbox", "--model", "--resume"}
     used_flags = sorted(a for a in argv if a.startswith("-"))
     expect(set(used_flags) <= allowed_flags, "cursor: the agent got only the flags Auto Pilot builds",
            " ".join(used_flags))
@@ -468,8 +498,8 @@ print("\n  -- canary_models_usage_timeline_outputs --")
 now = int(time.time())
 for verb, args in (("usage", []), ("timeline", ["--from", str(now - 86400), "--to", str(now + 3600)]),
                    ("models", ["--harness", "pi"]), ("models", ["--harness", "claude"]),
-                   ("sessions", ["--harness", "pi", "--cwd", project]), ("list", []), ("agents", [])):
-    rc, res, raw = helper(verb, *args)
+                   ("sessions", ["--harness", "pi", "--stdin"]), ("list", []), ("agents", [])):
+    rc, res, raw = helper(verb, *args, payload={"cwd": project} if args[-1:] == ["--stdin"] else None)
     name = " ".join([verb] + args[:2])
     expect(rc == 0 and isinstance(res, dict) and res.get("ok") is True and needle not in raw.encode(),
            "%s answers ok and carries no prompt text" % name, raw[:300])
@@ -514,6 +544,11 @@ expect(not found, "no file under the sandbox holds the prompt after the run", ",
 expect(rounds[0] > 0 and not leaks,
        "no process cmdline or environment and no helper answer carried the prompt (%d full /proc scans)" % rounds[0],
        "; ".join(sorted(leaks)[:5]))
+expect(rounds[0] > 0 and not folder_leaks,
+       "no process cmdline carried the working folder or a label built from it", "; ".join(sorted(folder_leaks)[:5]))
+if bus_proc is not None:
+    bus_proc.terminate()
+    bus_proc.wait(5)
 
 print("\n%d passed, %d failed" % (counts["pass"], counts["fail"]))
 sys.exit(1 if counts["fail"] else 0)

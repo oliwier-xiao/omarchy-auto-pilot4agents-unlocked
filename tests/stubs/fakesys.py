@@ -1,4 +1,4 @@
-"""Fake systemd-run, systemctl, busctl, qs and timedatectl for the helper tests.
+"""Fake systemd-run, systemctl, qs and timedatectl for the helper tests.
 
 Never imported by runtime code. Each wrapper script next to this file calls main(tool, argv).
 
