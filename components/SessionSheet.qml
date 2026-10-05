@@ -898,22 +898,26 @@ Item {
     return "in " + parent
   }
 
-  // A folder name with the letters the search matched in the accent ink, as styled text; every
-  // character of the name is escaped first. marks are [start, end) in characters, not UTF-16.
-  function markedName(name, marks) {
+  // A folder name cut at the letters the search matched, as [{text, hit}]: each piece is shown
+  // by its own plain-text Text, the matched ones in the accent ink, so no markup is ever built
+  // from a name. marks are [start, end) in characters, not UTF-16. Spaces become no-break spaces,
+  // which a piece keeps at its ends.
+  function namePieces(name, marks) {
     var chars = Array.from(String(name))
-    var esc = function (list) { return list.join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
-    var out = "", at = 0
+    var piece = function (from, to, hit) { return { text: chars.slice(from, to).join("").replace(/ /g, "\u00a0"), hit: hit } }
+    var out = [], at = 0
     var spans = Array.isArray(marks) ? marks.slice() : []
     spans.sort(function (a, b) { return a[0] - b[0] })
     for (var i = 0; i < spans.length; i++) {
       var a = Math.max(at, Math.min(chars.length, Number(spans[i][0]) || 0))
       var b = Math.max(a, Math.min(chars.length, Number(spans[i][1]) || 0))
       if (b <= a) continue
-      out += esc(chars.slice(at, a)) + "<font color=\"" + String(root.theme.accentInk) + "\"><b>" + esc(chars.slice(a, b)) + "</b></font>"
+      if (a > at) out.push(piece(at, a, false))
+      out.push(piece(a, b, true))
       at = b
     }
-    return out + esc(chars.slice(at))
+    if (at < chars.length || out.length === 0) out.push(piece(at, chars.length, false))
+    return out
   }
 
   // A folder taken from the search: the words are cleared, the folder becomes the place, and New
@@ -2058,26 +2062,62 @@ Item {
           font.pixelSize: root.theme.type.glyph
         }
 
-        Text {
+        // A session's title, or a folder's name. A folder found by a search carries the matched
+        // letters in the accent ink, piece by piece (namePieces), each piece its own plain-text
+        // Text; a name too long to show whole is shown elided, without marks.
+        Item {
           id: rowTitle
+          readonly property var pieces: row.session ? [] : root.namePieces(root.basename(row.suggestion), row.hit ? row.hit.marks : [])
+          readonly property bool marked: row.session === null && rowTitle.pieces.some(function (p) { return p.hit === true })
+            && nameParts.implicitWidth <= row.width * 0.45
           anchors.left: parent.left
           anchors.leftMargin: Style.space(38)
           anchors.verticalCenter: parent.verticalCenter
           width: row.session
             ? (row.showFolder ? parent.width * 0.40 : parent.width - Style.space(38) - metaRow.width - Style.space(16))
-            : Math.min(implicitWidth, parent.width * 0.45)
-          // A folder's name carries the matched letters in the accent ink: StyledText over a name
-          // whose every character was escaped (markedName). A session's title is plain.
-          textFormat: row.session ? Text.PlainText : Text.StyledText
-          text: {
-            if (row.session) return row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13)
-            return root.markedName(root.basename(row.suggestion), row.hit ? row.hit.marks : [])
+            : Math.min(rowTitle.marked ? nameParts.implicitWidth : plainTitle.implicitWidth, parent.width * 0.45)
+          height: plainTitle.implicitHeight
+
+          Text {
+            id: plainTitle
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            visible: !rowTitle.marked
+            textFormat: Text.PlainText
+            text: {
+              if (row.session) return row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13)
+              return root.basename(row.suggestion)
+            }
+            color: row.cursorHere ? root.theme.fg : root.theme.strong
+            elide: Text.ElideRight
+            maximumLineCount: 1
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.body
           }
-          color: row.cursorHere ? root.theme.fg : root.theme.strong
-          elide: Text.ElideRight
-          maximumLineCount: 1
-          font.family: root.theme.fontFamily
-          font.pixelSize: root.theme.type.body
+
+          // Laid out even while hidden (opacity, not visible), so its width can decide whether
+          // the marked name fits.
+          Row {
+            id: nameParts
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            opacity: rowTitle.marked ? 1 : 0
+
+            Repeater {
+              model: rowTitle.pieces
+
+              delegate: Text {
+                required property var modelData
+                textFormat: Text.PlainText
+                text: String(modelData.text)
+                color: modelData.hit ? root.theme.accentInk : (row.cursorHere ? root.theme.fg : root.theme.strong)
+                font.bold: modelData.hit === true
+                font.family: root.theme.fontFamily
+                font.pixelSize: root.theme.type.body
+              }
+            }
+          }
         }
 
         // Where a folder lives, in the soft ink: "in Home › Projects".

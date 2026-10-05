@@ -872,8 +872,11 @@ Item {
       check(C, sheet.newCwd === "/home/tester/code/api" && sheet.newLine === "in ~/code/api", "New session points at the folder found: " + sheet.newLine)
       check(C, sheet.crumbOf("/home/tester/code/api") === "in Home › code" && sheet.crumbOf("/home/tester/notes") === "in Home",
             "where it lives, in words: " + sheet.crumbOf("/home/tester/code/api"))
-      var marked = sheet.markedName("a<b&c", [[0, 1]])
-      check(C, marked.indexOf("<b>a</b>") > 0 && marked.indexOf("&lt;b&amp;c") > 0 && marked.indexOf("<b&c") < 0, "the name is escaped around its marks: " + marked)
+      var pieces = sheet.namePieces("a<b&c d", [[0, 1], [6, 7]])
+      check(C, JSON.stringify(pieces) === JSON.stringify([{ text: "a", hit: true }, { text: "<b&c\u00a0", hit: false }, { text: "d", hit: true }]),
+            "the name is cut at its marks into plain pieces, markup left as it is: " + JSON.stringify(pieces))
+      var shown = root.findAll(sheet, function (o) { return o.text === "api" && o.font && o.font.bold === true })
+      check(C, shown.length > 0 && shown.every(function (o) { return o.textFormat === Text.PlainText }), "the matched letters are a plain-text piece in bold")
       key(Qt.Key_N, Qt.ControlModifier)
       var p = root.lastPick()
       check(C, p && p.mode === "new" && p.cwd === "/home/tester/code/api", "Ctrl+N starts a new session in the found folder: " + JSON.stringify(p))
