@@ -93,13 +93,13 @@ PROMPT_KEEP_OPEN_S = 86400          # attention/disarmed jobs keep the prompt th
 CLOSED_RETENTION_S = 30 * 86400     # closed jobs pruned after this (Decision)
 OUTPUT_CAP = {"list": 1048576, "job-get": 524288, "sessions": 921600, "settings-get": 16384,
               "settings-set": 16384, "copy-resume": 16384, "usage": 131072, "models": 262144,
-              "timeline": 262144, "dirs": 262144}
+              "timeline": 262144, "dirs": 262144, "find-dirs": 131072}
 OUTPUT_CAP_DEFAULT = 65536
 VERB_DEADLINE_S = {"edition": 2, "list": 4, "job-get": 4, "job-create": 8, "job-update": 25, "job-delete": 6,
                    "preview": 12, "arm": 40, "run-now": 40, "disarm": 25, "cancel-all": 90, "reschedule": 25,
                    "swap": 40, "shift": 85, "reconcile": 60, "settings-get": 2, "settings-set": 4,
                    "copy-resume": 3, "sessions": 8, "usage": 3, "agents": 30, "models": 25, "timeline": 4,
-                   "dirs": 3, "workspace": 3, "folder": 3}
+                   "dirs": 3, "workspace": 3, "folder": 3, "find-dirs": 4}
 
 USAGE_RECORDS_MAX = 32
 USAGE_RESET_HORIZON_S = 45 * 86400
@@ -164,6 +164,18 @@ DIRS_LIST_MAX = 400                 # subfolders answered
 DIRS_DEADLINE_S = 2.0
 # The No project folder: ~/AutoPilot, made on request, the only folder made outside the state folder.
 WORKSPACE_NAME = "AutoPilot"
+# The folder search (finder.py): how deep, how much and how long it reads, how many folders it
+# answers, and the folders it lists by name but never goes into.
+FIND_DEPTH = 8
+FIND_ENTRIES = 60000
+FIND_FOLDERS = 20000
+FIND_DEADLINE_S = 1.5
+FIND_LIMIT = 40
+FIND_WORDS_MAX = 5
+FIND_QUERY_MAX = 80
+FIND_KNOWN_MAX = 64
+FIND_NOT_ENTERED = frozenset(("node_modules", "__pycache__", "venv", "site-packages", "bower_components",
+                              "target", "build", "dist", "Trash", "snap", "steamapps"))
 
 # Bounds of the shift verb (edition caps shiftMaxIds / shiftRangeSec).
 SHIFT_MAX_IDS = 50

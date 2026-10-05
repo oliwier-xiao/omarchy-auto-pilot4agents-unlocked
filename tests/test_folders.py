@@ -1,4 +1,4 @@
-"""Tests for the picker's folder reads: `dirs`, `folder`, `workspace` and `sessions --in`.
+"""Tests for the picker's folder reads: `dirs`, `find-dirs`, `folder`, `workspace` and `sessions --in`.
 
 Every test runs against a temporary HOME built in code. Nothing here reads the real HOME or
 makes a folder outside the temporary one. Run with PYTHONDONTWRITEBYTECODE=1.
@@ -231,6 +231,124 @@ class FolderCheckTests(ScanCase):
             with self.assertRaises(ApError, msg=payload) as caught:
                 cli_scan.cmd_folder([], payload)
             self.assertEqual(caught.exception.code, "bad_args")
+
+
+class FindDirsTests(ScanCase):
+    """`find-dirs`: folders by name anywhere under the home folder, for people who type no paths."""
+
+    def find(self, query, known=()):
+        answer = cli_scan.cmd_find_dirs([], {"q": query, "known": list(known)})
+        self.assertTrue(answer["ok"])
+        return answer
+
+    def paths(self, query, known=()):
+        home = os.path.realpath(self.home)
+        return [entry["path"][len(home) + 1:] for entry in self.find(query, known)["entries"]]
+
+    def test_words_find_folders_by_name_best_first(self):
+        for rel in ("Projects", "Projects-old-backup", "code/Last-Man-Hooping/.git", "code/last-man-site", "Pictures",
+                    "Documents/Łódź-zdjęcia", "notes"):
+            self.mkdir(rel)
+        self.assertEqual(self.paths("projects")[:2], ["Projects", "Projects-old-backup"])
+        exact, prefix = self.find("projects")["entries"][:2]
+        self.assertGreaterEqual(exact["score"] - prefix["score"], 150, "the whole name is a tier above its start")
+        self.assertEqual(self.paths("Projects")[0], "Projects", "case does not matter")
+        self.assertEqual(self.paths("projets")[0], "Projects", "a letter left out")
+        self.assertEqual(self.paths("projcets")[0], "Projects", "two letters swapped")
+        self.assertEqual(self.paths("piktures"), ["Pictures"], "a letter off")
+        self.assertEqual(self.paths("last man")[:2], ["code/Last-Man-Hooping", "code/last-man-site"])
+        self.assertEqual(set(self.paths("lastman")), {"code/Last-Man-Hooping", "code/last-man-site"}, "separators left out")
+        self.assertEqual(self.paths("code last")[0], "code/Last-Man-Hooping", "a word may name a folder above it")
+        self.assertEqual(self.paths("lodz zdjecia"), ["Documents/Łódź-zdjęcia"], "accents and ł fold")
+        top = self.find("last man")["entries"][0]
+        self.assertEqual([top["name"][a:b] for a, b in top["marks"]], ["Last", "Man"])
+        self.assertEqual((top["git"], top["own"], top["depth"]), (True, True, 2))
+        self.assertEqual(self.paths("zzzz"), [])
+        self.assertEqual(self.paths("pr"), ["Projects", "Projects-old-backup"], "two letters only start a name")
+
+    def test_checkouts_caches_and_noise(self):
+        self.mkdir("code/api/.git")
+        self.mkdir("code/api/src/api")
+        self.mkdir("go/pkg/mod/github.com/x/api")
+        self.mkdir("Pictures")
+        self.mkdir("fixtures")
+        self.assertEqual(self.paths("api")[:2], ["code/api", "code/api/src/api"], "a checkout ranks above a folder inside it")
+        self.assertNotIn("go/pkg/mod/github.com/x/api", self.paths("api"), "Go's module cache is never entered")
+        self.assertIn("go/pkg/mod", self.paths("mod"), "but listed by name")
+        self.assertEqual(self.paths("pictures"), ["Pictures"], "no loose matches once a name matches outright")
+        self.assertEqual(self.paths("x y"), [], "one-letter words are left out")
+        self.assertEqual(self.paths("api x"), self.paths("api"))
+
+    def test_folders_with_sessions_rank_higher_within_a_tier(self):
+        self.mkdir("alpha-one")
+        self.mkdir("alpha-two")
+        self.assertEqual(self.paths("alpha")[0], "alpha-one")
+        known = os.path.join(os.path.realpath(self.home), "alpha-two")
+        self.assertEqual(self.paths("alpha", [known])[0], "alpha-two")
+
+    def test_hidden_links_other_names_and_skipped_folders(self):
+        self.mkdir(".secret/Projects")
+        self.mkdir("node_modules/inner-pkg")
+        self.mkdir("app/build/inner-out")
+        self.mkdir("Projects")
+        os.symlink(os.path.join(self.home, "Projects"), os.path.join(self.home, "projects-link"))
+        outside = os.path.join(self.tmp, "outside-dir")
+        os.makedirs(os.path.join(outside, "far-away"))
+        os.symlink(outside, os.path.join(self.home, "out"))
+        os.mkdir(os.fsencode(self.home) + b"/bad\xff")
+        os.mkdir(os.fsencode(self.home) + b"/bad\xff/inside-bad")
+        self.assertEqual(self.paths("projects"), ["Projects"], "never inside a hidden folder, never a link")
+        self.assertEqual(self.paths("node modules"), ["node_modules"], "listed by name")
+        self.assertEqual(self.paths("inner"), [], "but never entered")
+        self.assertEqual(self.paths("far away"), [], "a link out of the home folder is never followed")
+        self.assertEqual(self.paths("inside bad"), [], "a name that is not printable is never entered")
+        self.assertGreaterEqual(self.find("zz yy")["skipped"], 1)
+
+    def test_bounds_stop_early_and_say_so(self):
+        for n in range(300):
+            self.mkdir("many/d%03d" % n)
+        self.mkdir("a/b/c/deep-target")
+        self.patch(consts, "FIND_DEPTH", 3)
+        self.assertEqual(self.paths("deep target"), [], "deeper than the walk reads")
+        self.patch(consts, "FIND_DEPTH", 8)
+        self.assertEqual(self.paths("deep target"), ["a/b/c/deep-target"])
+        self.patch(consts, "FIND_FOLDERS", 5)
+        self.assertEqual((self.find("d001")["truncated"], self.find("d001")["reason"]), (True, "folders"))
+        self.patch(consts, "FIND_FOLDERS", 20000)
+        self.patch(consts, "FIND_ENTRIES", 50)
+        self.assertEqual(self.find("d001")["reason"], "entries")
+        self.patch(consts, "FIND_ENTRIES", 60000)
+        self.patch(consts, "FIND_DEADLINE_S", 0)
+        self.assertEqual(self.find("d001")["reason"], "time")
+        self.patch(consts, "FIND_DEADLINE_S", 1.5)
+        self.patch(consts, "FIND_LIMIT", 3)
+        self.assertEqual(len(self.find("d0")["entries"]), 3)
+        self.patch(consts, "FIND_LIMIT", 40)
+        self.patch(consts, "OUTPUT_CAP", dict(consts.OUTPUT_CAP, **{"find-dirs": folders._CAP_SLACK + 1500}))
+        cut = self.find("d0")
+        self.assertTrue(0 < len(cut["entries"]) < 40 and cut["truncated"] and cut["reason"] == "cap", cut["reason"])
+
+    def test_find_dirs_argv_and_payload(self):
+        self.mkdir("Projects")
+        main.check_argv("find-dirs", [])
+        self.assertIn("find-dirs", main.VERBS)
+        self.assertTrue(main.VERBS["find-dirs"][2], "the words come on stdin, never in argv")
+        self.assertIn("find-dirs", consts.VERB_DEADLINE_S)
+        for argv in (["projects"], ["--q", "projects"], ["--stdin"]):
+            with self.assertRaises(main._ArgError):
+                main.check_argv("find-dirs", argv)
+            with self.assertRaises(ApError):
+                cli_scan.cmd_find_dirs(argv, {"q": "projects"})
+        home = os.path.realpath(self.home)
+        for payload in (None, {}, {"q": 7}, {"q": "a"}, {"q": " a "}, {"q": "x" * 81}, {"q": "a\nb"},
+                        {"q": "ok", "known": ["relative"]}, {"q": "ok", "known": home}, {"q": "ok", "extra": 1},
+                        {"q": "ok", "known": [home] * 65}, {"known": [home]}):
+            with self.assertRaises(ApError, msg=payload) as caught:
+                cli_scan.cmd_find_dirs([], payload)
+            self.assertEqual(caught.exception.code, "bad_args")
+        self.assertEqual(self.paths("projects"), ["Projects"])
+        answer = cli_scan.cmd_find_dirs([], {"q": "projects"})
+        self.assertEqual(sorted(answer), ["entries", "home", "ok", "q", "reason", "scanned", "skipped", "truncated"])
 
 
 class WorkspaceTests(ScanCase):

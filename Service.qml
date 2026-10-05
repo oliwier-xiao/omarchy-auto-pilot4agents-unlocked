@@ -256,7 +256,7 @@ Item {
     "job-create":   { ms: 13000, cap: 65536,  stdin: true,  lane: "write", mutates: true },
     "job-update":   { ms: 30000, cap: 65536,  stdin: true,  lane: "write", mutates: true },
     "job-delete":   { ms: 11000, cap: 65536,  stdin: false, lane: "write", mutates: true },
-    "preview":      { ms: 17000, cap: 65536,  stdin: true,  lane: "read",  mutates: false },
+    "preview":      { ms: 17000, cap: 65536,  stdin: true,  lane: "read",  mutates: false, latest: true },
     "arm":          { ms: 45000, cap: 65536,  stdin: false, lane: "write", mutates: true },
     "run-now":      { ms: 45000, cap: 65536,  stdin: false, lane: "write", mutates: true },
     "disarm":       { ms: 30000, cap: 65536,  stdin: false, lane: "write", mutates: true },
@@ -273,6 +273,8 @@ Item {
     "workspace":    { ms: 8000,  cap: 65536,  stdin: false, lane: "write", mutates: false },
     // Each folder is its own read: the folder is the payload, so it is part of the key.
     "folder":       { ms: 8000,  cap: 65536,  stdin: true,  lane: "read",  mutates: false, keyed: true },
+    // One search at a time: a newer one replaces a search still waiting (the words on stdin).
+    "find-dirs":    { ms: 9000,  cap: 131072, stdin: true,  lane: "read",  mutates: false, latest: true },
     "usage":        { ms: 8000,  cap: 131072, stdin: false, lane: "read",  mutates: false },
     "agents":       { ms: 35000, cap: 65536,  stdin: false, lane: "read",  mutates: false },
     "models":       { ms: 30000, cap: 262144, stdin: false, lane: "read",  mutates: false },
@@ -392,6 +394,22 @@ Item {
       return
     }
     root._request("folder", [], { "path": path }, function (res) {
+      if (typeof cb === "function") cb(res)
+    })
+  }
+
+  // Folders under the home folder whose names match words (`ap4a find-dirs`, the words on stdin).
+  // known: folders with sessions, ranked higher. cb gets {ok, q, entries: [{path, name, depth,
+  // git, own, score, marks}], truncated, reason}; a search replaced by a newer one gets
+  // {ok: false, code: "superseded"}.
+  function findDirs(words, known, cb) {
+    var q = typeof words === "string" ? words : ""
+    if (q.length === 0 || q.length > 80 || /[\x00-\x1f\x7f]/.test(q)) {
+      if (typeof cb === "function") Qt.callLater(function () { cb({ ok: false, code: "bad_args", message: "Nothing to search for." }) })
+      return
+    }
+    var list = Array.isArray(known) ? known.filter(function (k) { return root._validCwd(k) }).slice(0, 64) : []
+    root._request("find-dirs", [], { "q": q, "known": list }, function (res) {
       if (typeof cb === "function") cb(res)
     })
   }
@@ -856,8 +874,10 @@ Item {
     return Object.keys(root._readInflight).length
   }
 
+  // A verb marked `latest` keeps only the newest request waiting; the one it replaces is told
+  // "superseded". Every other read merges its callbacks into the one already waiting.
   function _mergeRead(existing, req) {
-    if (req.verb === "preview") {
+    if (root._verbs[req.verb] && root._verbs[req.verb].latest === true) {
       if (existing) Qt.callLater(function () { root._deliver(existing, root._qmlError("superseded")) })
       return req
     }

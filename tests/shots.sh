@@ -378,6 +378,25 @@ Window {
       stubService.dirs = next
     }
     function clearDirs() { stubService.dirs = ({}) }
+    // The folders of the tree whose names hold every word, best first.
+    function findDirs(q, known, cb) {
+      var words = q.toLowerCase().split(/\s+/).filter(function (w) { return w !== "" })
+      var out = []
+      for (var dir in stubService.tree) {
+        var list = stubService.tree[dir]
+        for (var i = 0; i < list.length; i++) {
+          var e = list[i]
+          var name = e.name.toLowerCase()
+          if (e.hidden || !words.every(function (w) { return name.indexOf(w) >= 0 })) continue
+          var at = name.indexOf(words[0])
+          var path = dir + "/" + e.name
+          out.push({ path: path, name: e.name, depth: path.split("/").length - 3, git: e.git === true, own: true,
+                     score: 1000 - at - path.length, marks: [[at, at + words[0].length]] })
+        }
+      }
+      out.sort(function (a, b) { return b.score - a.score })
+      stubService.later(cb, { ok: true, q: q, entries: out, truncated: false, reason: null })
+    }
     // A folder of the tree, or one listed in its parent, is there.
     function checkFolder(path, cb) {
       var slash = path.lastIndexOf("/")
@@ -578,7 +597,12 @@ Window {
         folder.editQuery("~/code/api")
         host.go(16)
       } else if (s === 16 && host.wait >= 10) {
-        host.pair("$T/out/where-folder.png", function () { host.go(17) })
+        host.pair("$T/out/where-folder.png", function () { host.go(30) })
+      } else if (s === 30) {
+        p.sheetFor("session").editQuery("api")
+        host.go(31)
+      } else if (s === 31 && host.wait >= 10) {
+        host.pair("$T/out/where-search.png", function () { host.go(17) })
       } else if (s === 17) {
         p.sheetFor("session").close()
         var fresh = host.compose()
@@ -625,7 +649,7 @@ fit1600 "$T/out/queue.png" "$OUT/docs/queue.png"
 fit1600 "$T/out/history.png" "$OUT/docs/history.png"
 fit1600 "$T/out/where.png" "$OUT/docs/where.png"
 if [ -n "${AP4A_SHOTS_EXTRA:-}" ]; then
-  for f in where-noproject where-suggest where-folder compose-empty; do
+  for f in where-noproject where-suggest where-folder where-search compose-empty; do
     need "$f.png"
     fit1600 "$T/out/$f.png" "$AP4A_SHOTS_EXTRA/$f.png"
   done

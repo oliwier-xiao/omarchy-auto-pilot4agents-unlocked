@@ -17,6 +17,11 @@ import "../lib/Model.js" as Model
 //     button that starts a new session there (cursor row 0). Enter resumes the highlighted
 //     session and Ctrl+F forks it.
 //
+// Typing words also searches the home folder for folders by name (`ap4a find-dirs`), so nobody
+// needs to know a path: "projects" finds ~/Projects, "last man" finds Last-Man-Hooping. The
+// folders found come first, then the sessions the words match; Enter on a folder makes it the
+// place, with New session under the cursor.
+//
 // A new session starts only in a folder the helper has looked at (`ap4a folder`): one that
 // exists and that a job may run in. A typed path that is not there turns the list into the
 // folders it most likely means (another case, a letter off, a path from / meant from ~), and
@@ -90,6 +95,9 @@ Item {
   property var _pendingNew: null
   // Folders a typed path's walk asked the tree to read, so each is asked once per open.
   property var _walkAsked: ({})
+  // The folder search's last answer: the words it was for, the folders found, and whether it
+  // stopped early or failed.
+  property var _found: ({ q: "", entries: [], truncated: false, failed: false })
 
   function pointerMoved(item, x, y) {
     var p = item.mapToItem(null, x, y)
@@ -121,7 +129,7 @@ Item {
 
   readonly property string hints: root.focusPane === "places"
     ? "↑/↓ choose  ·  ←/→ close or open  ·  Enter sessions  ·  Ctrl+H hidden folders  ·  Ctrl+N new session here  ·  Tab sessions  ·  Esc back"
-    : "Type to filter  ·  ←/→ agent  ·  ↑/↓ choose  ·  Enter pick  ·  Ctrl+F fork  ·  Ctrl+N new session  ·  Tab folders  ·  Esc back"
+    : "Type to search  ·  ←/→ agent  ·  ↑/↓ choose  ·  Enter pick  ·  Ctrl+F fork  ·  Ctrl+N new session  ·  Tab folders  ·  Esc back"
 
   readonly property var filters: ["all"].concat(Edition.HARNESS_IDS)
   readonly property var allResult: root.service && root.service.sessions && root.service.sessions["all"]
@@ -140,7 +148,9 @@ Item {
     + " cannot be used: it has to be a folder of yours, not a link, that nobody else can write. Fix it, or pick another folder."
 
   // A typed folder path wins over the chosen place while it is typed.
-  readonly property string activePath: root.queryPath !== "" ? root.queryPath : root.placePath
+  // Words typed (not a path): a search over every place, so the place on the left steps aside.
+  readonly property bool searching: root.queryPath === "" && root.query.trim() !== ""
+  readonly property string activePath: root.queryPath !== "" ? root.queryPath : (root.searching ? "" : root.placePath)
   readonly property string activeKind: root.activePath === "" ? "recent"
     : (root.activePath === root.workspacePath ? "workspace" : (root.activePath === root.home ? "home" : "folder"))
 
@@ -207,7 +217,7 @@ Item {
 
   // Row 0 is the New session button; the rows after it are the sessions, or the folders a
   // typed path that is not there most likely means.
-  readonly property int rowCount: (root.suggesting ? root.suggestions.length : root.rows.length) + 1
+  readonly property int rowCount: (root.suggesting ? root.suggestions.length : root.folderRows.length + root.rows.length) + 1
   // The agent a new session here starts with: the chosen filter, else the draft's own agent,
   // else the agent of the newest session in this place, else the default agent in Settings.
   // The button names it, so nobody starts an agent they did not mean to.
@@ -217,7 +227,7 @@ Item {
     var newest = null
     for (var i = 0; i < root.placeRows.length; i++) {
       var r = root.placeRows[i]
-      if (r && Edition.HARNESS_IDS.indexOf(r.harness) >= 0 && !root.agentBlocked(r.harness)
+      if (r && String(r.cwd || "") === root.newCwd && Edition.HARNESS_IDS.indexOf(r.harness) >= 0 && !root.agentBlocked(r.harness)
           && (newest === null || (Number(r.updatedAtMs) || 0) > (Number(newest.updatedAtMs) || 0))) newest = r
     }
     if (newest !== null) return newest.harness
@@ -226,7 +236,15 @@ Item {
     for (var k = 0; k < Edition.HARNESS_IDS.length; k++) if (!root.agentBlocked(Edition.HARNESS_IDS[k])) return Edition.HARNESS_IDS[k]
     return Edition.HARNESS_IDS[0]
   }
-  readonly property string newCwd: root.activePath !== "" ? root.activePath : (root.initialCwd !== "" ? root.initialCwd : root.home)
+  // Where New session starts: the place, or while searching the folder under the cursor, else
+  // the best folder found.
+  readonly property string newCwd: {
+    if (root.searching) {
+      var f = root.folderAt(root.cursor)
+      return f !== "" ? f : (root.folderRows.length > 0 ? root.folderRows[0] : "")
+    }
+    return root.activePath !== "" ? root.activePath : (root.initialCwd !== "" ? root.initialCwd : root.home)
+  }
 
   // cwd -> {total, by: {harness: n}}, over the recent rows and every folder list read.
   readonly property var countsByCwd: {
@@ -537,6 +555,7 @@ Item {
   }
 
   readonly property string placeTitle: {
+    if (root.searching) return "Search"
     if (root.activeKind === "recent") return "All recent sessions"
     if (root.activeKind === "workspace") return "No project"
     if (root.activeKind === "home") return "Home"
@@ -567,6 +586,13 @@ Item {
   }
 
   readonly property string placeFact: {
+    if (root.searching) {
+      var nf = root.folderRows.length, ns = root.rows.length
+      var found = (nf === 1 ? "1 folder" : nf + " folders") + " and " + (ns === 1 ? "1 session" : ns + " sessions") + " match"
+      if (root.finding) return ns > 0 ? "Searching your folders…  ·  " + (ns === 1 ? "1 session" : ns + " sessions") + " match" : "Searching your folders…"
+      if (root._found.truncated) return found + ". The search stopped early: more letters narrow it."
+      return found + ". Enter opens a folder."
+    }
     if (root.activeKind === "recent") return "Every folder, newest first."
     if (root.activeKind === "home") return "Agents do not start in your home folder itself. Pick a folder inside it, or No project."
     if (root.activeKind === "workspace") {
@@ -605,6 +631,8 @@ Item {
   // The one line under New session: where it starts, or why it cannot.
   readonly property string newLine: {
     var where = Model.shortPath(root.newCwd, root.home)
+    if (root.newState === "none" && root.searching)
+      return root.finding ? "Looking for folders that match…" : "No folder matches. Pick one on the left, or type a path."
     if (root.newState === "none") return "Pick a folder on the left, type a path such as ~/code/api, or choose No project."
     if (root.newState === "home") return "Not in your home folder itself. Pick a folder inside it, or No project."
     if (root.newCwd === root.workspacePath)
@@ -638,11 +666,12 @@ Item {
     return where + " cannot be used. Pick another folder."
   }
 
-  // Asks the helper whether a job may run in path, once per open; a new session waiting for
-  // that answer starts, or says why not, when it lands.
-  function checkFolder(path) {
+  // Asks the helper whether a job may run in path, once per open (again with force, keeping the
+  // last answer shown until the new one lands); a new session waiting for that answer starts, or
+  // says why not, when it lands.
+  function checkFolder(path, force) {
     if (!root.canCheck || path === "" || path === root.home || path === root.workspacePath) return
-    if (root._checks.hasOwnProperty(path) || root._checking[path] === true) return
+    if ((force !== true && root._checks.hasOwnProperty(path)) || root._checking[path] === true) return
     var gen = root._openGen
     var asking = {}
     for (var k in root._checking) asking[k] = true
@@ -669,12 +698,6 @@ Item {
     })
   }
 
-  function dropCheck(path) {
-    if (!root._checks.hasOwnProperty(path)) return
-    var next = {}
-    for (var n in root._checks) if (n !== path) next[n] = root._checks[n]
-    root._checks = next
-  }
 
   // ---------------------------------------------------------------- a typed path
 
@@ -683,7 +706,16 @@ Item {
   // from ~, since "/Projects" usually means ~/Projects.
   //   {exists: true | false | null (not known), wait: a folder to read first, hidden, suggestions}
   readonly property var walk: root.walkPath(root.queryPath)
-  readonly property var suggestions: root.walk.suggestions
+  // What the walk found next to the typed folder, then what the search found anywhere.
+  readonly property var suggestions: {
+    var out = root.walk.suggestions.slice()
+    if (root.queryPath !== "")
+      for (var i = 0; i < root.foundEntries.length; i++) {
+        var p = root.foundEntries[i].path
+        if (p !== root.queryPath && out.indexOf(p) < 0) out.push(p)
+      }
+    return out.slice(0, 8)
+  }
   // A typed folder that is not there, and folders it may mean: they take the list's place.
   readonly property bool suggesting: root.queryPath !== "" && root.suggestions.length > 0 && root.rows.length === 0
     && (root.newState === "missing" || root.walk.exists === false)
@@ -796,10 +828,129 @@ Item {
     Qt.callLater(function () { if (root.active) root.service.loadDirs(wait, hidden) })
   }
 
-  // A suggestion taken: its path fills the search, and the list shows that folder.
+  // A suggestion taken: that folder becomes the place.
   function acceptSuggestion(path) {
+    root.goToFolder(path)
+  }
+
+  // ---------------------------------------------------------------- the folder search
+
+  // The words the search looks for: the words typed, or the names in a typed path that is not
+  // there ("/Projects" looks for "Projects"). Two letters at least.
+  readonly property string searchWords: {
+    var t = ""
+    if (root.queryPath === "") t = root.query
+    else if (root.walk.exists === false || root.newState === "missing") {
+      var p = root.queryPath
+      t = p.indexOf(root.home + "/") === 0 ? p.slice(root.home.length + 1) : p.slice(1)
+    }
+    t = t.replace(/[\/\\]+/g, " ").replace(/\s+/g, " ").trim()
+    return t.replace(/\s/g, "").length >= 2 && t.length <= 80 ? t : ""
+  }
+  readonly property bool canFind: !!root.service && typeof root.service.findDirs === "function"
+  readonly property var foundEntries: root.searchWords !== "" && root._found.q === root.searchWords && Array.isArray(root._found.entries)
+    ? root._found.entries : []
+  readonly property bool finding: root.canFind && root.searchWords !== "" && root._found.q !== root.searchWords
+  // Folders found for typed words, above the sessions.
+  readonly property var folderRows: {
+    if (root.queryPath !== "") return []
+    var out = []
+    for (var i = 0; i < root.foundEntries.length && out.length < 6; i++) out.push(root.foundEntries[i].path)
+    return out
+  }
+
+  // Asks for the folders that match the words now typed; a newer search replaces one still waiting.
+  function findFolders() {
+    var q = root.searchWords
+    if (!root.active || q === "" || !root.canFind || root._found.q === q) return
+    var gen = root._openGen
+    var known = []
+    for (var cwd in root.countsByCwd)
+      if (cwd.indexOf(root.home + "/") === 0 && known.length < 64) known.push(cwd)
+    root.service.findDirs(q, known, function (res) {
+      if (gen !== root._openGen || !res || res.code === "superseded") return
+      root._found = { q: q, entries: res.ok === true && Array.isArray(res.entries) ? res.entries : [],
+                      truncated: res.ok === true && res.truncated === true, failed: res.ok !== true }
+    })
+  }
+
+  function hitFor(path) {
+    for (var i = 0; i < root.foundEntries.length; i++) if (root.foundEntries[i].path === path) return root.foundEntries[i]
+    return null
+  }
+
+  // Where a folder lives, the way people say it: "in Home › Projects".
+  function crumbOf(path) {
+    var slash = path.lastIndexOf("/")
+    var parent = slash > 0 ? path.slice(0, slash) : "/"
+    if (parent === root.home) return "in Home"
+    if (parent.indexOf(root.home + "/") === 0) return "in Home › " + parent.slice(root.home.length + 1).split("/").join(" › ")
+    return "in " + parent
+  }
+
+  // A folder name with the letters the search matched in the accent ink, as styled text; every
+  // character of the name is escaped first. marks are [start, end) in characters, not UTF-16.
+  function markedName(name, marks) {
+    var chars = Array.from(String(name))
+    var esc = function (list) { return list.join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
+    var out = "", at = 0
+    var spans = Array.isArray(marks) ? marks.slice() : []
+    spans.sort(function (a, b) { return a[0] - b[0] })
+    for (var i = 0; i < spans.length; i++) {
+      var a = Math.max(at, Math.min(chars.length, Number(spans[i][0]) || 0))
+      var b = Math.max(a, Math.min(chars.length, Number(spans[i][1]) || 0))
+      if (b <= a) continue
+      out += esc(chars.slice(at, a)) + "<font color=\"" + String(root.theme.accentInk) + "\"><b>" + esc(chars.slice(a, b)) + "</b></font>"
+      at = b
+    }
+    return out + esc(chars.slice(at))
+  }
+
+  // A folder taken from the search: the words are cleared, the folder becomes the place, and New
+  // session there has the cursor, so a second Enter starts it.
+  function goToFolder(path) {
     if (typeof path !== "string" || path === "") return
-    root.editQuery(Model.shortPath(path, root.home))
+    root.query = ""
+    root.reveal(path)
+    root.setPlace(path === root.workspacePath ? "workspace" : "folder", path)
+    root.focusPane = "list"
+    root.setCursorByHand(0)
+  }
+
+  // ---------------------------------------------------------------- the right cursor
+
+  // Cursor row 0 is New session; then the folders (found, or suggested for a typed path), then
+  // the sessions.
+  function folderAt(slot) {
+    var list = root.suggesting ? root.suggestions : root.folderRows
+    return slot >= 1 && slot <= list.length ? list[slot - 1] : ""
+  }
+  function sessionAt(slot) {
+    if (root.suggesting) return null
+    var i = slot - 1 - root.folderRows.length
+    return i >= 0 && i < root.rows.length ? root.rows[i] : null
+  }
+  function keyAt(slot) {
+    var f = root.folderAt(slot)
+    if (f !== "") return "dir " + f
+    var r = root.sessionAt(slot)
+    return r ? root.rowKeyOf(r) : ""
+  }
+  // The cursor goes back to the row it was on by hand, after the rows above it changed.
+  function restoreCursor() {
+    // Counted from the lists themselves: this runs from their change handlers, before rowCount's
+    // own binding has caught up.
+    var count = (root.suggesting ? root.suggestions.length : root.folderRows.length + root.rows.length) + 1
+    if (root._cursorTouched && root._rowKey !== "") {
+      for (var slot = 1; slot < count; slot++) {
+        if (root.keyAt(slot) === root._rowKey) {
+          root.cursor = slot
+          return true
+        }
+      }
+    }
+    if (root.cursor > count - 1) root.cursor = count - 1
+    return false
   }
 
   // ---------------------------------------------------------------- helpers
@@ -869,7 +1020,7 @@ Item {
 
   function resetCursor() {
     if (root.suggesting) root.cursor = 1
-    else root.cursor = root.queryPath === "" && root.rows.length > 0 ? 1 : 0
+    else root.cursor = root.queryPath === "" && root.folderRows.length + root.rows.length > 0 ? 1 : 0
   }
 
   function open(args) {
@@ -893,6 +1044,7 @@ Item {
     root._checking = ({})
     root._pendingNew = null
     root._walkAsked = ({})
+    root._found = ({ q: "", entries: [], truncated: false, failed: false })
     var opened = {}
     if (root.home !== "") opened[root.home] = true
     root.expanded = opened
@@ -973,7 +1125,7 @@ Item {
   }
 
   function pickFork() {
-    if (root.cursor > 0 && !root.suggesting) root.pickSession(root.rows[root.cursor - 1], "fork")
+    if (root.sessionAt(root.cursor) !== null) root.pickSession(root.sessionAt(root.cursor), "fork")
     else root.noticeRequested("Ctrl+F forks the highlighted session. Pick one with ↑/↓ first.", "warn", null)
   }
 
@@ -985,8 +1137,10 @@ Item {
     if (fromRow && root.focusPane === "places") {
       var p = root.placeOf(root.leftRows[root.leftCursor])
       if (p !== null && p.path !== "") cwd = p.path
-    } else if (fromRow && root.cursor > 0 && !root.suggesting) {
-      var r = root.rows[root.cursor - 1]
+    } else if (fromRow && root.folderAt(root.cursor) !== "") {
+      cwd = root.folderAt(root.cursor)
+    } else if (fromRow && root.sessionAt(root.cursor) !== null) {
+      var r = root.sessionAt(root.cursor)
       if (r) {
         cwd = String(r.cwd || "")
         if (root.filter === "all") harness = r.harness
@@ -1032,11 +1186,13 @@ Item {
       return
     }
     // Only a folder the helper has looked at: it exists, and a job may run there. A no from
-    // earlier in this open is asked again, since the folder may have been fixed meanwhile.
+    // earlier in this open is said at once and asked again behind it, since the folder may have
+    // been fixed meanwhile; the suggestions it brought stay up.
     var c = root._checks.hasOwnProperty(cwd) ? root._checks[cwd] : null
     if (c !== null && c.state !== "ok" && c.state !== "unknown") {
-      root.dropCheck(cwd)
-      c = null
+      root.noticeRequested(root.checkSentence(cwd, c), "warn", null)
+      root.checkFolder(cwd, true)
+      return
     }
     // No project has its own check (`workspace`), made above or answered when the sheet opened.
     if (c === null && root.canCheck && cwd !== root.workspacePath) {
@@ -1054,8 +1210,8 @@ Item {
 
   function pickCursor() {
     if (root.cursor <= 0) root.pickNew(false)
-    else if (root.suggesting) root.acceptSuggestion(root.suggestions[root.cursor - 1])
-    else root.pickSession(root.rows[root.cursor - 1], "resume")
+    else if (root.folderAt(root.cursor) !== "") root.goToFolder(root.folderAt(root.cursor))
+    else root.pickSession(root.sessionAt(root.cursor), "resume")
   }
 
   function stepFilter(dir) {
@@ -1069,7 +1225,7 @@ Item {
   function setCursorByHand(index) {
     root._cursorTouched = true
     root.cursor = Math.max(0, Math.min(root.rowCount - 1, index))
-    root._rowKey = root.cursor > 0 && !root.suggesting ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
+    root._rowKey = root.cursor > 0 ? root.keyAt(root.cursor) : ""
   }
 
   function moveCursor(delta) { root.setCursorByHand(root.cursor + delta) }
@@ -1133,7 +1289,7 @@ Item {
 
   // Scrolled once the views have the new rows: a jump that also adds rows lands past the old end.
   onCursorChanged: {
-    root._rowKey = root.cursor > 0 && !root.suggesting ? root.rowKeyOf(root.rows[root.cursor - 1]) : ""
+    root._rowKey = root.cursor > 0 ? root.keyAt(root.cursor) : ""
     Qt.callLater(function () {
       if (root.cursor === 0) list.positionViewAtBeginning()
       else if (list.count > root.cursor - 1) list.positionViewAtIndex(root.cursor - 1, ListView.Contain)
@@ -1184,6 +1340,14 @@ Item {
     }
   }
 
+  // The folder search runs once the typing rests.
+  Timer {
+    id: findTimer
+    interval: 160
+    repeat: false
+    onTriggered: root.findFolders()
+  }
+
   // The place's folder is checked once the cursor or the typing rests on it.
   Timer {
     id: checkTimer
@@ -1208,18 +1372,17 @@ Item {
   }
 
   onRowsChanged: {
-    if (root._cursorTouched && root._rowKey !== "") {
-      for (var r = 0; r < root.rows.length; r++) {
-        if (root.rowKeyOf(root.rows[r]) === root._rowKey) {
-          root.cursor = r + 1
-          return
-        }
-      }
-    }
-    if (root.cursor > root.rowCount - 1) root.cursor = root.rowCount - 1
+    if (root.restoreCursor()) return
     // The first answer lands after the sheet opened: start on the newest session.
     if (root.active && !root._cursorTouched && root.cursor === 0 && root.query === "" && root.rows.length > 0) root.cursor = 1
   }
+  // Found folders land after the words were typed: the best one takes the cursor, unless the
+  // cursor was moved by hand meanwhile.
+  onFolderRowsChanged: {
+    if (root.restoreCursor()) return
+    if (!root._cursorTouched) root.resetCursor()
+  }
+  onSearchWordsChanged: if (root.active && root.searchWords !== "") findTimer.restart()
 
   // Opaque, so the view underneath never shows through; no entrance animation
   // (a keyboard-opened overlay appears at once, R6 6.1).
@@ -1278,11 +1441,13 @@ Item {
     anchors.topMargin: Style.spacing.lg
     theme: root.theme
     text: root.query
-    placeholder: "Type to filter, or type a folder path such as ~/code/api"
+    placeholder: "Search folders and sessions, such as projects, or type a path such as ~/code/api"
     active: root.active
     trailing: root.loading ? "Reading sessions…"
       : (root.query !== "" || root.filter !== "all"
-        ? root.rows.length + " of " + root.countFor(root.filter)
+        ? (root.folderRows.length > 0
+          ? root.foundEntries.length + (root._found.truncated ? "+" : "") + (root.foundEntries.length === 1 ? " folder" : " folders") + "  ·  " : "")
+          + root.rows.length + " of " + root.countFor(root.filter)
         : root.countFor("all") + (root.countFor("all") === 1 ? " session" : " sessions"))
   }
 
@@ -1767,7 +1932,7 @@ Item {
       anchors.topMargin: Style.spacing.lg
       visible: root.suggesting
       textFormat: Text.PlainText
-      text: "Did you mean one of these folders? Enter fills it in."
+      text: "Did you mean one of these folders? Enter opens it."
       color: root.theme.strong
       elide: Text.ElideRight
       maximumLineCount: 1
@@ -1823,8 +1988,9 @@ Item {
         id: row
         required property int index
         readonly property int slot: row.index + 1
-        readonly property string suggestion: root.suggesting && row.index < root.suggestions.length ? root.suggestions[row.index] : ""
-        readonly property var session: !root.suggesting && row.index < root.rows.length ? root.rows[row.index] : null
+        readonly property string suggestion: root.folderAt(row.slot)
+        readonly property var session: root.sessionAt(row.slot)
+        readonly property var hit: row.suggestion !== "" ? root.hitFor(row.suggestion) : null
         readonly property bool cursorHere: root.focusPane === "list" && root.cursor === row.slot
         readonly property bool chosen: row.session !== null && root.initialSessionId !== "" && row.session.id === root.initialSessionId
         readonly property bool showFolder: row.session !== null && root.activeKind === "recent"
@@ -1886,17 +2052,36 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: row.session
             ? (row.showFolder ? parent.width * 0.40 : parent.width - Style.space(38) - metaRow.width - Style.space(16))
-            : parent.width - Style.space(38) - metaRow.width - Style.space(16)
-          textFormat: Text.PlainText
+            : Math.min(implicitWidth, parent.width * 0.45)
+          // A folder's name carries the matched letters in the accent ink: StyledText over a name
+          // whose every character was escaped (markedName). A session's title is plain.
+          textFormat: row.session ? Text.PlainText : Text.StyledText
           text: {
             if (row.session) return row.session.title ? String(row.session.title) : Model.elideMiddle(row.session.id, 13)
-            return Model.shortPath(row.suggestion, root.home)
+            return root.markedName(root.basename(row.suggestion), row.hit ? row.hit.marks : [])
           }
           color: row.cursorHere ? root.theme.fg : root.theme.strong
           elide: Text.ElideRight
           maximumLineCount: 1
           font.family: root.theme.fontFamily
           font.pixelSize: root.theme.type.body
+        }
+
+        // Where a folder lives, in the soft ink: "in Home › Projects".
+        Text {
+          anchors.left: rowTitle.right
+          anchors.leftMargin: Style.space(10)
+          anchors.right: metaRow.left
+          anchors.rightMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: row.suggestion !== ""
+          textFormat: Text.PlainText
+          text: row.suggestion !== "" ? root.crumbOf(row.suggestion) : ""
+          color: root.theme.soft
+          elide: Text.ElideMiddle
+          maximumLineCount: 1
+          font.family: root.theme.fontFamily
+          font.pixelSize: root.theme.type.data
         }
 
         Text {
@@ -1921,6 +2106,20 @@ Item {
           anchors.rightMargin: Style.space(12)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(14)
+
+          // A folder that has sessions says how many.
+          Text {
+            width: Style.space(70)
+            horizontalAlignment: Text.AlignRight
+            visible: row.suggestion !== "" && !!root.countsByCwd[row.suggestion]
+            textFormat: Text.PlainText
+            text: row.suggestion !== "" && root.countsByCwd[row.suggestion]
+              ? root.countsByCwd[row.suggestion].total + (root.countsByCwd[row.suggestion].total === 1 ? " session" : " sessions") : ""
+            color: root.theme.soft
+            font.family: root.theme.fontFamily
+            font.pixelSize: root.theme.type.meta
+            font.features: root.theme.type.digits
+          }
 
           Text {
             width: Style.space(70)
@@ -1950,7 +2149,7 @@ Item {
             width: Style.space(52)
             horizontalAlignment: Text.AlignRight
             textFormat: Text.PlainText
-            text: row.chosen ? root.glyph.check + " now" : (row.session ? "resume" : "go to")
+            text: row.chosen ? root.glyph.check + " now" : (row.session ? "resume" : "open")
             color: row.chosen ? root.theme.okInk : (row.cursorHere ? root.theme.accentInk : root.theme.soft)
             font.family: root.theme.fontFamily
             font.pixelSize: root.theme.type.meta
@@ -1976,7 +2175,7 @@ Item {
         anchors.leftMargin: Style.space(38)
         y: Style.space(10)
         width: parent.width - Style.space(50)
-        visible: root.rows.length === 0 && !root.noMatch && !root.suggesting
+        visible: root.rows.length === 0 && root.folderRows.length === 0 && !root.noMatch && !root.suggesting
         textFormat: Text.PlainText
         text: {
           if (root.loading) return "Reading sessions…"
@@ -2002,13 +2201,15 @@ Item {
         anchors.leftMargin: Style.space(38)
         y: Style.space(10)
         width: parent.width - Style.space(50)
-        visible: root.rows.length === 0 && root.noMatch
+        visible: root.rows.length === 0 && root.folderRows.length === 0 && root.noMatch
         spacing: Style.space(7)
 
         Text {
           width: Math.max(0, Math.min(implicitWidth, parent.width - recoverText.implicitWidth - parent.spacing))
           textFormat: Text.PlainText
-          text: "No sessions match \"" + root.query + "\"."
+          text: root.finding ? "Searching your folders for \"" + root.query + "\"…"
+            : (root._found.failed ? "Folders could not be searched. No sessions match \"" + root.query + "\"."
+              : "No folder or session matches \"" + root.query + "\".")
           color: root.theme.strong
           elide: Text.ElideRight
           maximumLineCount: 1

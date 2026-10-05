@@ -4,7 +4,8 @@
 #
 # 1. qmllint (Qt 6) on SessionSheet.qml and SendToSection.qml with the repository stand-ins.
 # 2. One offscreen Qt 6 engine run: SessionSheet and SendToSection against a stand-in service
-#    that answers `dirs`, `sessions --in`, `workspace` and `folder` the way Service.qml does, and
+#    that answers `dirs`, `sessions --in`, `workspace`, `folder` and `find-dirs` the way
+#    Service.qml does, and
 #    records every call. Every case prints one CASE line; the suite needs all of them, and an
 #    engine warning from these files fails it.
 #
@@ -22,7 +23,8 @@ late_answers_keep_the_cursor_the_place_and_the_highlight no_project_is_made_once
 hover_counts_only_when_the_pointer_moves folders_closed_or_hidden_under_the_cursor typed_paths_and_refusals
 the_tree_scrolls_to_a_revealed_folder new_session_button_names_its_folder_and_agent
 a_typed_folder_that_is_not_there_suggests_real_ones a_folder_the_helper_refuses_is_said_before_a_pick
-a_new_session_waits_for_its_folder_check sendto_starts_with_no_agent_and_says_what_is_missing"
+a_new_session_waits_for_its_folder_check sendto_starts_with_no_agent_and_says_what_is_missing
+typing_words_finds_folders_anywhere the_newest_search_wins_and_an_earlier_open_is_dropped"
 
 export QT_QPA_PLATFORM=offscreen
 export QT_FORCE_STDERR_LOGGING=1
@@ -302,6 +304,29 @@ Item {
       svc.dirs = svc.put(svc.dirs, path, a)
     }
     function clearDirs() { svc.rec("clearDirs", []); svc.dirs = ({}) }
+    // `ap4a find-dirs`: the folders of the tree whose names hold every word, best first. Its
+    // ranking is the helper's (tests/test_folders.py); this only answers the way it does.
+    function findDirs(q, known, cb) {
+      svc.rec("findDirs", [q, known])
+      svc.later("findDirs", function () {
+        var words = q.toLowerCase().split(/\s+/).filter(function (w) { return w !== "" })
+        var out = []
+        for (var dir in root.tree) {
+          var list = root.tree[dir]
+          for (var i = 0; i < list.length; i++) {
+            var e = list[i]
+            var name = e.name.toLowerCase()
+            if (e.hidden || e.link || !words.every(function (w) { return name.indexOf(w) >= 0 })) continue
+            var at = name.indexOf(words[0])
+            var path = dir + "/" + e.name
+            out.push({ path: path, name: e.name, depth: path.split("/").length - 3, git: e.git === true, own: e.own !== false,
+                       score: 1000 - at, marks: [[at, at + words[0].length]] })
+          }
+        }
+        out.sort(function (a, b) { return b.score - a.score || a.depth - b.depth })
+        cb({ ok: true, q: q, entries: out, truncated: false, reason: null })
+      })
+    }
     // `ap4a folder`: a folder of the tree, or one listed in its parent, is there; folderStates
     // says otherwise for the folders a case refuses.
     property var folderStates: ({})
@@ -749,8 +774,9 @@ Item {
       check(C, sheet.newState === "missing" && !sheet.newReady, "New session is off: " + sheet.newState)
       check(C, sheet.cursor === 1, "the cursor starts on the suggestion")
       key(Qt.Key_Return)
-      check(C, root.picks.length === 0 && sheet.query === "~/code" && sheet.queryPath === "/home/tester/code", "Enter fills it in: " + sheet.query)
-      check(C, !sheet.suggesting && sheet.cursor === 0, "and the button takes the cursor")
+      check(C, root.picks.length === 0 && sheet.query === "" && sheet.placePath === "/home/tester/code" && sheet.activePath === "/home/tester/code",
+            "Enter opens the folder: " + sheet.query + " " + sheet.activePath)
+      check(C, !sheet.suggesting && sheet.cursor === 0 && sheet.newLine === "in ~/code", "and New session there takes the cursor: " + sheet.newLine)
       key(Qt.Key_U, Qt.ControlModifier, "")
       root.typeText("~/notse")
     }, function () { return sheet.suggesting })
@@ -827,6 +853,62 @@ Item {
       check(C, lit.length === 1, "a chosen agent is lit")
       sendTo.harness = "claude"
     })
+    C = "typing_words_finds_folders_anywhere"
+    step(C, function (C) {
+      fresh({})
+      root.typeText("api")
+    })
+    step(C, function (C) {
+      var asked = root.last("findDirs")
+      check(C, asked !== null && asked.args[0] === "api", "the words go to the search: " + JSON.stringify(asked))
+      check(C, asked && asked.args[1].indexOf("/home/tester/code/api") >= 0, "folders with sessions go along, to rank higher")
+      check(C, sheet.folderRows[0] === "/home/tester/code/api", "the folder is found without a path: " + JSON.stringify(sheet.folderRows))
+      check(C, sheet.cursor === 1 && sheet.folderAt(1) === "/home/tester/code/api", "the best folder has the cursor")
+      check(C, sheet.sessionAt(sheet.folderRows.length + 1) !== null, "the sessions the words match follow the folders")
+      check(C, sheet.searching && sheet.placeTitle === "Search" && sheet.placeFact.indexOf("1 folder and ") === 0,
+            "a search, not the place on the left: " + sheet.placeTitle + " / " + sheet.placeFact)
+      check(C, sheet.newCwd === "/home/tester/code/api" && sheet.newLine === "in ~/code/api", "New session points at the folder found: " + sheet.newLine)
+      check(C, sheet.crumbOf("/home/tester/code/api") === "in Home › code" && sheet.crumbOf("/home/tester/notes") === "in Home",
+            "where it lives, in words: " + sheet.crumbOf("/home/tester/code/api"))
+      var marked = sheet.markedName("a<b&c", [[0, 1]])
+      check(C, marked.indexOf("<b>a</b>") > 0 && marked.indexOf("&lt;b&amp;c") > 0 && marked.indexOf("<b&c") < 0, "the name is escaped around its marks: " + marked)
+      key(Qt.Key_N, Qt.ControlModifier)
+      var p = root.lastPick()
+      check(C, p && p.mode === "new" && p.cwd === "/home/tester/code/api", "Ctrl+N starts a new session in the found folder: " + JSON.stringify(p))
+      root.picks = []
+      key(Qt.Key_Return)
+      check(C, root.picks.length === 0 && sheet.query === "" && sheet.placePath === "/home/tester/code/api" && sheet.cursor === 0,
+            "Enter opens it, New session under the cursor: " + sheet.placePath + " " + sheet.cursor)
+      key(Qt.Key_Return)
+      p = root.lastPick()
+      check(C, p && p.cwd === "/home/tester/code/api", "and Enter again starts it")
+    }, function () { return sheet.folderRows.length > 0 })
+
+    C = "the_newest_search_wins_and_an_earlier_open_is_dropped"
+    step(C, function (C) {
+      fresh({}, { findDirs: true })
+      root.typeText("no")
+      root.mark = Date.now()
+    })
+    step(C, function (C) {
+      root.typeText("tes")
+      root.mark = Date.now()
+    }, function () { return root.since(300) })
+    step(C, function (C) {
+      var asked = root.calls("findDirs").map(function (c) { return c.args[0] })
+      check(C, JSON.stringify(asked) === JSON.stringify(["no", "notes"]), "one search per resting moment: " + JSON.stringify(asked))
+      check(C, sheet.finding && sheet.folderRows.length === 0, "nothing shown before the answer")
+      svc.flush("findDirs")
+      check(C, JSON.stringify(sheet.folderRows) === JSON.stringify(["/home/tester/notes"]), "the answer for the words now typed: " + JSON.stringify(sheet.folderRows))
+      root.typeText("x")
+      root.mark = Date.now()
+    }, function () { return root.since(300) })
+    step(C, function (C) {
+      check(C, root.calls("findDirs").length === 3, "a third search for notesx")
+      sheet.open({})
+      svc.flush("findDirs")
+      check(C, sheet._found.q === "" && sheet.folderRows.length === 0, "its answer, for an earlier open, is dropped")
+    }, function () { return root.since(300) })
   }
 
   Timer {
