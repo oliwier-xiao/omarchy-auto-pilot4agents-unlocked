@@ -8,9 +8,15 @@ Each job runs headless in a transient systemd user timer, so it fires while the 
 
 | Install | Update | Remove |
 |---|---|---|
-| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked` — after [cancelling jobs](#removal) |
+| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents-unlocked.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents-unlocked` | `omarchy plugin remove oliwier.auto-pilot4agents-unlocked`, after [cancelling jobs](#removal) |
 
 ![Auto Pilot Unlocked panel on Compose](preview.png)
+
+| Install | Update | Remove |
+|---|---|---|
+| `omarchy plugin add https://github.com/oliwier-xiao/omarchy-auto-pilot4agents.git --enable` | `omarchy plugin update oliwier.auto-pilot4agents` | `omarchy plugin remove oliwier.auto-pilot4agents`, after [cancelling jobs](#removal) |
+
+![Auto Pilot panel on Compose](preview.png)
 
 ## What it does
 
@@ -45,7 +51,10 @@ omarchy restart shell
 The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
 
 Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps,
-jobs first — see [Removal](#removal).
+jobs first: see [Removal](#removal).
+
+Update with `omarchy plugin update oliwier.auto-pilot4agents`. Removal takes three steps, jobs
+first: see [Removal](#removal).
 
 ## Dependencies
 
@@ -358,7 +367,7 @@ The methods are `open`, `close`, `toggle`, `compose`, `queue` and `history`. `sh
    - the job still matches what you confirmed
    - for reset jobs, the new limit window has really opened
    - the agent binary is still trusted
-   - the working folder is allowed
+   - the working folder is allowed, and it and its agent configuration are still writable by you alone
    - the paid usage rules, the sign-in (Codex, Pi) and Cursor's settings and folder trust
    - with paid usage off, the limit is not already used up
    - the session is not in use
@@ -480,7 +489,9 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - Agent binaries come only from the fixed locations listed under [Dependencies](#dependencies), and version-manager shims are refused. Each binary must be a regular file owned by you or root that nobody else can write, in folders nobody else can write, and it is checked again right before it runs.
 - The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, and `OPENCODE_PERMISSION` for OpenCode. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin` and the three `PI_*` variables above. API keys, tokens and display variables are never passed on.
 - The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused. No project is `~/AutoPilot`, which passes the same check.
-- A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot` and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
+- The working folder has to be yours and writable by you alone, and so does the agent configuration already in it: `.claude`, `.codex`, `.cursor`, `.gemini`, `.opencode`, `.pi`, `.mcp.json`, `opencode.json`, `opencode.jsonc`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and everything directly inside those folders must belong to you or root, with nobody else able to write to them. Whoever could change them would choose the hooks, allow rules, MCP servers and instructions a run loads while nobody is watching. This is checked when you arm a job and again when it fires.
+- A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot`, its bytecode cache and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
+- Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session (or Pi session file), the working folder, and a notification's title and text: the job's label, its agent and what happened. Never a prompt, a key or a token.
 - The system tools it calls (`systemd-run`, `systemctl`, `busctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
 - Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. Besides its own state and runtime folders, the only folder it makes is `~/AutoPilot`, mode 0700, when you pick No project for a new session and nothing is there yet. Whatever is already at that path is used only when it is a folder of yours, not a link, that nobody else can write; anything else is left as it is and refused. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
 
@@ -519,7 +530,7 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 - **Pi.** Unattended is not offered, every job needs a provider and a model, and Pi reports a finished run even when the provider failed, so Auto Pilot judges the run by Pi's last answer rather than its exit code.
 - **Editing files with Claude.** An Unattended Claude job edits files only where your own Claude permission rules already allow it. Auto and Full access edit without asking.
 - **Auto and Full access are unverified live.** Their flags come from each agent's own `--help`. The helper and panel tests cover the commands they build, but no scheduled run at these levels has been watched end to end yet.
-- **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal.
+- **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal. Auto Pilot only makes sure nobody but you can change them; what they do is up to you.
 - **Resuming.** A job that resumes a session adds its turns to that session. Fork the session if you want the original left untouched.
 - **Budget.** `--max-budget-usd` is Claude's own estimate and is used only with paid usage on. The turn limit and the runtime limit are the hard caps.
 - **Reset triggers and limits.** They need the usage records other tools keep, except the two computed resets. Without a record, pick a time instead.

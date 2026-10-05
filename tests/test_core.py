@@ -31,9 +31,9 @@ ROOT = os.path.dirname(TESTS)
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(ROOT, "bin"))
 
-from autopilot import (agents, bounded, cli_core, consts, edition, errors, fsio, harness, identity, jobs,  # noqa: E402
-                       models, notify, paid, proto, reconcile, sessions, settings, systemd, timeutil, trigger, usage,
-                       windows)
+from autopilot import (agents, bounded, cli_core, consts, edition, errors, fsio, h5_v2, harness, identity,  # noqa: E402
+                       jobs, models, notify, paid, proto, reconcile, sessions, settings, systemd, timeutil, trigger,
+                       usage, windows)
 from autopilot import main as helper_main  # noqa: E402
 from autopilot.errors import ApError  # noqa: E402
 
@@ -65,7 +65,7 @@ CONTRACT_MESSAGES = {
     "invalid_target": "The session choice is not valid.",
     "invalid_session": "The session id is not valid.",
     "session_not_found": "That session could not be found.",
-    "invalid_cwd": "That working folder is not allowed.",
+    "invalid_cwd": "That working folder is not allowed: it has to be yours and writable by you alone, and not your home, a system folder or the plugin's own.",
     "invalid_model": "The model name is not valid.",
     "invalid_label": "The label is not valid.",
     "invalid_limits": "The limits are out of range.",
@@ -87,7 +87,7 @@ CONTRACT_MESSAGES = {
     "preview_stale": "The command changed since the preview. Check it again.",
     "kill_switch": "Auto Pilot Unlocked is switched off by its kill switch file. Delete ~/.config/omarchy/auto-pilot4agents-unlocked/DISABLED to switch it on.",
     "plugin_disabled": "Auto Pilot Unlocked is not enabled in the bar.",
-    "plugin_identity": "The plugin folder does not match its manifest.",
+    "plugin_identity": "The plugin folder does not match its manifest, or its path holds a space or another character a systemd unit cannot carry.",
     "systemd_failed": "The system scheduler refused the job.",
     "systemd_timeout": "The system scheduler did not answer in time.",
     "stop_unverified": "The job could not be confirmed as stopped.",
@@ -529,8 +529,11 @@ class Sandbox(unittest.TestCase):
         return {"harness": harness_id, "link": link, "real": real, "exec": exec_prefix, "ok": True, "reason": None}
 
     def make_dir(self, name):
+        # 0755 whatever the umask: a working folder others can write is refused (jobs.check_cwd),
+        # and a umask of 002 would otherwise make every fixture project one.
         path = os.path.join(self.home, name)
-        os.makedirs(path, exist_ok=True)
+        os.makedirs(path, mode=0o755, exist_ok=True)
+        os.chmod(path, 0o755)
         return os.path.realpath(path)
 
     def write_shell(self, enabled, data=None):
@@ -928,7 +931,10 @@ class StateTests(Sandbox):
         self.assertEqual(res["error"], "untrusted_tool")
         self.assertEqual(self.calls("busctl"), [])
         fsio.check_tool("/usr/bin/systemctl")
-        fsio.check_tool("/usr/bin/qs")
+        # Quickshell is the plugin's dependency, not a CI runner's: where it is installed its binary
+        # has to pass the same check, and where it is not there is nothing at that path to check.
+        if os.path.lexists("/usr/bin/qs"):
+            fsio.check_tool("/usr/bin/qs")
 
     def test_jobs_nlink_refused(self):
         self.create()
@@ -2315,6 +2321,159 @@ class V2CoreTests(Sandbox):
         rc, obj, _err = self.verb("arm", created["id"], "--digest", self.stored(created["id"])["digest"])
         self.assertEqual((rc, obj["code"], obj["field"]), (1, "trigger_unsupported", "trigger.kind"))
         self.assertEqual(self.stored(created["id"])["state"]["status"], "disarmed")
+
+
+# ================================================================================ review hardening
+
+class ReviewHardeningTests(Sandbox):
+    """What a read-only review of 0.2.0 found, each held as a test that fails on 0.2.0."""
+
+    def _cwd_code(self, path):
+        try:
+            jobs.check_cwd(path)
+        except ApError as exc:
+            return exc.code
+        return "accepted"
+
+    def test_a_working_folder_others_can_write_is_refused(self):
+        # A job fires with nobody present, and the agent loads hooks, allow rules and MCP servers
+        # from its folder. Writable by anyone else, the folder is theirs to fill.
+        self.assertEqual(self._cwd_code(self.project), "accepted")
+        for mode in (0o775, 0o757, 0o777, 0o2775):
+            os.chmod(self.project, mode)
+            self.assertEqual(self._cwd_code(self.project), "invalid_cwd", oct(mode))
+        os.chmod(self.project, 0o755)
+        self.assertEqual(self._cwd_code(self.project), "accepted")
+
+    def test_the_agent_configuration_inside_it_has_to_be_private_too(self):
+        claude = os.path.join(self.project, ".claude")
+        os.mkdir(claude, 0o755)
+        os.chmod(claude, 0o775)
+        self.assertEqual(self._cwd_code(self.project), "invalid_cwd")
+        os.chmod(claude, 0o755)
+        settings_json = os.path.join(claude, "settings.json")
+        with open(settings_json, "w") as handle:
+            handle.write("{}")
+        os.chmod(settings_json, 0o666)
+        self.assertEqual(self._cwd_code(self.project), "invalid_cwd")
+        os.chmod(settings_json, 0o644)
+        self.assertEqual(self._cwd_code(self.project), "accepted")
+        # A symlink is judged by what it points at: CLAUDE.md -> AGENTS.md is a common layout.
+        agents_md = os.path.join(self.project, "AGENTS.md")
+        with open(agents_md, "w") as handle:
+            handle.write("# rules\n")
+        os.chmod(agents_md, 0o644)
+        os.symlink("AGENTS.md", os.path.join(self.project, "CLAUDE.md"))
+        self.assertEqual(self._cwd_code(self.project), "accepted")
+        os.chmod(agents_md, 0o666)
+        self.assertEqual(self._cwd_code(self.project), "invalid_cwd")
+        os.chmod(agents_md, 0o644)
+        # A dangling link points at nothing an agent could load.
+        os.symlink("nowhere.md", os.path.join(self.project, "GEMINI.md"))
+        self.assertEqual(self._cwd_code(self.project), "accepted")
+        self.assertIn("writable by you alone", errors.MESSAGES["invalid_cwd"])
+
+    def test_a_symlinked_shell_json_still_reads(self):
+        # stow and yadm leave ~/.config/omarchy/shell.json as a link into a dotfiles folder.
+        shell = os.path.join(self.home, ".config", "omarchy", "shell.json")
+        dotfiles = self.make_dir("dotfiles")
+        target = os.path.join(dotfiles, "shell.json")
+        os.replace(shell, target)
+        os.symlink(target, shell)
+        self.assertIs(fsio.plugin_enabled_in_shell(), True)
+        os.chmod(target, 0o666)
+        self.assertIsNone(fsio.plugin_enabled_in_shell())
+        os.chmod(target, 0o600)
+        os.unlink(shell)
+        os.symlink("/etc/hostname", shell)          # somebody else's file: refused
+        self.assertIsNone(fsio.plugin_enabled_in_shell())
+        os.unlink(shell)
+        os.symlink(os.path.join(dotfiles, "gone.json"), shell)
+        self.assertIsNone(fsio.plugin_enabled_in_shell())
+        os.unlink(shell)
+        os.replace(target, shell)
+        self.assertIs(fsio.plugin_enabled_in_shell(), True)
+
+    def test_a_value_with_a_trailing_newline_is_not_an_id(self):
+        # `$` matches before a final newline; 0.2.0 accepted "uuid\n" from agent output, stored it,
+        # and the next load_store refused the whole job store.
+        uuid_sid = "3f2a0c19-0000-4000-8000-00000000abcd"
+        oc_sid = "ses_" + "a" * 16
+        for value in (uuid_sid, oc_sid):
+            self.assertTrue(sessions._valid_id("opencode" if value.startswith("ses_") else "claude", value))
+        for value in (uuid_sid + "\n", oc_sid + "\n"):
+            self.assertFalse(sessions._valid_id("opencode" if value.startswith("ses_") else "claude", value))
+        self.assertTrue(h5_v2.model_ok("gpt-5") and h5_v2.pi_provider_ok("openai"))
+        self.assertFalse(h5_v2.model_ok("gpt-5\n"))
+        self.assertFalse(h5_v2.pi_provider_ok("openai\n"))
+        from autopilot import classify, runner
+        state = {"sessionId": None}
+        classify._sid(state, uuid_sid + "\n", consts.UUID_RE)
+        self.assertIsNone(state["sessionId"])
+        classify._sid(state, uuid_sid, consts.UUID_RE)
+        self.assertEqual(state["sessionId"], uuid_sid)
+        job = {"harness": "claude", "target": {"mode": "resume"}}
+        self.assertIsNone(runner._run_session_id(job, {"sessionId": uuid_sid + "\n", "outcome": "ok"}))
+        self.assertEqual(runner._run_session_id(job, {"sessionId": uuid_sid, "outcome": "ok"}), uuid_sid)
+
+    def test_a_bytecode_cache_others_can_write_is_not_trusted(self):
+        real_trust = fsio.check_trusted_file
+        fake = os.path.join(self.tmp, "plugin")
+        package = os.path.join(fake, "bin", "autopilot")
+        os.makedirs(package, mode=0o755)
+        launcher = os.path.join(fake, "bin", "ap4a")
+        for path, mode in ((launcher, 0o755), (os.path.join(package, "main.py"), 0o644)):
+            with open(path, "w") as handle:
+                handle.write("#\n")
+            os.chmod(path, mode)
+
+        def trust(path, *, executable, check_ancestors=True):
+            return real_trust(path, executable=executable, check_ancestors=check_ancestors and not path.startswith(fake))
+
+        self.p.set(fsio, "check_trusted_file", trust)
+        self.p.set(fsio, "plugin_dir", lambda: fake)
+        self.assertTrue(fsio.plugin_code_trusted())
+        cache = os.path.join(package, "__pycache__")
+        os.mkdir(cache, 0o755)
+        os.chmod(cache, 0o755)
+        pyc = os.path.join(cache, "main.cpython-312.pyc")
+        with open(pyc, "wb") as handle:
+            handle.write(b"\0")
+        os.chmod(pyc, 0o644)
+        self.assertTrue(fsio.plugin_code_trusted())
+        os.chmod(pyc, 0o666)
+        self.assertFalse(fsio.plugin_code_trusted())
+        os.chmod(pyc, 0o644)
+        os.chmod(cache, 0o777)
+        self.assertFalse(fsio.plugin_code_trusted())
+
+    def test_a_label_reaches_a_notification_as_text_not_markup(self):
+        label = '<a href="https://evil.example">Open</a> & <img src=x>'
+        _summary, body = notify.render("done", {"label": label, "harness": "claude"}, now=timeutil.now(),
+                                       duration_s=5)
+        self.assertNotIn("<", body)
+        self.assertNotIn(">", body)
+        self.assertIn("&lt;a href='https://evil.example'&gt;", body)
+        # Truncated first, escaped after: a cut never lands inside an entity.
+        edge = "x" * (consts.LABEL_MAX - 1) + "&"
+        self.assertTrue(notify.sanitize_label(edge).endswith("x&amp;"))
+
+    def test_a_session_that_needs_its_lock_waits_without_a_runtime_folder(self):
+        from autopilot import runner
+        sid = "3f2a0c19-0000-4000-8000-00000000abcd"
+        self.p.set(harness, "write_session", lambda job: sid)
+        job = {"harness": "claude"}
+        fd, held = runner._session_lock(job)
+        self.assertIsNotNone(fd)
+        self.assertFalse(held)
+        try:
+            self.assertEqual(runner._session_lock(job), (None, True))   # held by the first
+        finally:
+            os.close(fd)
+        os.environ.pop("XDG_RUNTIME_DIR", None)
+        self.assertEqual(runner._session_lock(job), (None, True))
+        self.p.set(harness, "write_session", lambda job: None)
+        self.assertEqual(runner._session_lock(job), (None, False))     # no session, no lock needed
 
 
 if __name__ == "__main__":

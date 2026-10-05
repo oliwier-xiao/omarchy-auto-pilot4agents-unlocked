@@ -47,7 +47,9 @@ REPO, TMP = sys.argv[1], os.path.realpath(sys.argv[2])
 sys.path.insert(0, os.path.join(REPO, "bin"))
 from autopilot import edition  # noqa: E402
 
-PY = "/usr/bin/python3"
+# Not "PY": a line inside this heredoc that starts with its own end token reads, to
+# shellcheck and to anyone skimming, as the place the heredoc ends.
+PYTHON = "/usr/bin/python3"
 FINAL = ("done", "failed", "limit", "skipped", "gave_up", "missed", "interrupted", "paused", "needs_confirm",
          "busy", "disarmed")
 counts = {"pass": 0, "fail": 0}
@@ -153,7 +155,7 @@ scanner.start()
 
 def helper(verb, *args, payload=None):
     phase[0] = verb
-    argv = [PY, "-I", "-S", "-B", launch, "--tools", tools_json, "--runtime-re", runtime_re,
+    argv = [PYTHON, "-I", "-S", "-B", launch, "--tools", tools_json, "--runtime-re", runtime_re,
             "--candidates", cand_json, "--trust-root", TMP, "--", verb] + list(args)
     env = {"HOME": home, "USER": os.environ.get("USER", "tester"), "XDG_RUNTIME_DIR": runtime,
            "LANG": "C.UTF-8", "PATH": "/usr/bin", "PYTHONDONTWRITEBYTECODE": "1"}

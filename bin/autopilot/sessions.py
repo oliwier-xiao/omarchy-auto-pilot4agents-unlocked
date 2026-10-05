@@ -104,8 +104,8 @@ def _valid_id(harness, value):
     if not isinstance(value, str):
         return False
     if harness == "opencode":
-        return bool(consts.OPENCODE_ID_RE.match(value))
-    return bool(consts.UUID_RE.match(value))
+        return bool(consts.OPENCODE_ID_RE.fullmatch(value))
+    return bool(consts.UUID_RE.fullmatch(value))
 
 
 def _title(candidates, cwd):

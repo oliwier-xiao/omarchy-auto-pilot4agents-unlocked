@@ -108,7 +108,7 @@ def _cursor_status(exec_prefix, env, deadline_s):
         authenticated = document.get("isAuthenticated")
         status = document.get("status")
         kept["isAuthenticated"] = authenticated if isinstance(authenticated, bool) else None
-        kept["status"] = status if isinstance(status, str) and _STATUS_RE.match(status) else None
+        kept["status"] = status if isinstance(status, str) and _STATUS_RE.fullmatch(status) else None
     del document
     return kept
 
@@ -141,7 +141,7 @@ def _version(name, exec_prefix, env, deadline_s):
     if not match:
         return None
     version = match.group(1).decode("ascii")
-    return version if _VERSION_FULL.get(name, _VERSION_FULL_DEFAULT).match(version) else None
+    return version if _VERSION_FULL.get(name, _VERSION_FULL_DEFAULT).fullmatch(version) else None
 
 
 def _identity_key(name, discovery):
@@ -183,8 +183,8 @@ class _VersionCache:
             if not isinstance(entry, dict):
                 continue
             key, version, at = entry.get("key"), entry.get("version"), entry.get("at")
-            if isinstance(key, str) and _KEY_RE.match(key) and isinstance(version, str) \
-                    and _CACHED_VERSION_RE.match(version) and isinstance(at, int) \
+            if isinstance(key, str) and _KEY_RE.fullmatch(key) and isinstance(version, str) \
+                    and _CACHED_VERSION_RE.fullmatch(version) and isinstance(at, int) \
                     and not isinstance(at, bool) and now - _VERSION_TTL_S <= at <= now + 300:
                 self.entries[name] = {"key": key, "version": version, "at": at}
 

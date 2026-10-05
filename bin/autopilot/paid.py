@@ -335,7 +335,7 @@ def _gemini_type_in(path, system):
         value = obj.get("selectedAuthType")
     if value is None:
         return None
-    return value if isinstance(value, str) and _TYPE_RE.match(value) else _UNREADABLE
+    return value if isinstance(value, str) and _TYPE_RE.fullmatch(value) else _UNREADABLE
 
 
 def gemini_settings_paths(home, cwd=None):
@@ -418,7 +418,7 @@ def _flat_costs(value, prefix="", out=None, depth=0):
 def _model_entry(obj):
     status = obj.get("status")
     return {"cost": _flat_costs(obj.get("cost")) if isinstance(obj.get("cost"), dict) else {},
-            "status": status if isinstance(status, str) and _TYPE_RE.match(status) else None,
+            "status": status if isinstance(status, str) and _TYPE_RE.fullmatch(status) else None,
             "name": _name(obj.get("name"))}
 
 
@@ -503,7 +503,7 @@ def classify_opencode(model, verbose, catalogue, catalogue_mtime, now, project_c
     if not h5_v2.model_ok(model) or "/" not in model:
         return "unknown"
     provider = model.split("/", 1)[0]
-    if not _PROVIDER_RE.match(provider):
+    if not _PROVIDER_RE.fullmatch(provider):
         return "unknown"
     if provider == "anthropic":
         return "anthropic"

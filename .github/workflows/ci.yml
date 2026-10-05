@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A read-only token and no secrets: nothing in this workflow pushes, comments or
+# publishes. The marketplace's own workflows are written the same way.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: shellcheck, test suite
+    # A named release rather than ubuntu-latest, so the runner changes when this file
+    # says so and not when the label moves to the next Ubuntu.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        # Pinned by commit, as the marketplace's own workflows pin it, and without the
+        # token left behind in .git/config for a later step to find.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Tools the suite calls
+        # Nothing is installed here: python3, git, jq and shellcheck are on the runner
+        # image. The suites call /usr/bin/python3 by that path, the same path the
+        # timer's unit runs. Qt is not on the image, so the QML engine suites say they
+        # skip and the Python, canary and preflight suites carry the run.
+        run: |
+          bash --version | head -1
+          /usr/bin/python3 --version
+          git --version
+          jq --version
+          shellcheck --version | sed -n 2p
+
+      - name: Shellcheck
+        run: shellcheck -S error dev-sync.sh tests/*.sh
+
+      - name: Test suite
+        shell: bash
+        # Exits non-zero if any suite fails. Keep this on the runner's own non-root
+        # user: the helper refuses state, working folders and code that another account
+        # could change, and under uid 0 those checks no longer mean what the tests assert.
+        run: bash tests/run.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: The suite ran, and did not skip itself away
+        # A suite that lost its interpreter would skip and exit 0, so a green run also
+        # has to show the unit tests it ran. Close to three hundred run on a bare runner;
+        # the floor is set under that.
+        run: |
+          ran="$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' "$RUNNER_TEMP/suite.log" | tail -1)"
+          echo "${ran:-0} unit tests ran"
+          test "${ran:-0}" -ge 250 || { echo "fewer than 250 unit tests ran: a suite is skipping what it should run"; exit 1; }

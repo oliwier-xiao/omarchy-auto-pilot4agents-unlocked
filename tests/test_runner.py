@@ -93,6 +93,7 @@ from autopilot.errors import ApError  # noqa: E402
 
 ORIGINAL_CANDIDATES = copy.deepcopy(consts.CLI_CANDIDATES)
 REAL_APPEND_OBSERVED = limits_history.append_observed
+REAL_CHECK_CWD = jobs.check_cwd
 REAL_RUN_AGENT = supervise.run_agent
 GATE_OK = {"ok": True, "code": None, "detail": None, "notes": [], "billing": None, "provider": None, "resetAtMs": None,
            "pending": False, "defer": None}
@@ -1511,6 +1512,16 @@ class RunVerbTests(RunVerbBase):
         self.assertEqual(self.stored(job["id"])["state"]["reason"], "plugin_identity")
         self.assertEqual(self.agent_entries(), [])
         self.assertEqual([n[11] for n in self.notified if n[0] == consts.TOOLS["busctl"]], ["Paused"] * 4)
+
+    def test_a_folder_others_can_write_by_the_time_it_fires_stops_the_run(self):
+        # Checked again at fire time, not only when the job was made: a folder can be opened up
+        # in between, and the run would load whatever was put there.
+        self.p.set(jobs, "check_cwd", REAL_CHECK_CWD)
+        job = self.seed()
+        os.chmod(job["target"]["cwd"], 0o777)
+        self.assertEqual(self.run_verb(job["id"]), ["CWD_REFUSED"])
+        self.assertEqual(self.stored(job["id"])["state"]["reason"], "cwd_refused")
+        self.assertEqual(self.agent_entries(), [])
 
     def test_stale_gen_exits(self):
         job = self.seed()

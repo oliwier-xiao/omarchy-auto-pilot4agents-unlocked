@@ -137,7 +137,7 @@ def _keep_text(state, text):
 
 
 def _sid(state, value, grammar):
-    if state["sessionId"] is None and isinstance(value, str) and grammar.match(value):
+    if state["sessionId"] is None and isinstance(value, str) and grammar.fullmatch(value):
         state["sessionId"] = value
 
 
