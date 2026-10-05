@@ -95,9 +95,9 @@ Item {
   property var _pendingNew: null
   // Folders a typed path's walk asked the tree to read, so each is asked once per open.
   property var _walkAsked: ({})
-  // The folder search's last answer: the words it was for, the folders found, and whether it
-  // stopped early or failed.
-  property var _found: ({ q: "", entries: [], truncated: false, failed: false })
+  // The folder search's answers this open, by the words they were for: {entries, truncated,
+  // failed}. Each lands under its own words, so a late answer never stands for newer typing.
+  property var _found: ({})
 
   function pointerMoved(item, x, y) {
     var p = item.mapToItem(null, x, y)
@@ -590,7 +590,8 @@ Item {
       var nf = root.folderRows.length, ns = root.rows.length
       var found = (nf === 1 ? "1 folder" : nf + " folders") + " and " + (ns === 1 ? "1 session" : ns + " sessions") + " match"
       if (root.finding) return ns > 0 ? "Searching your folders…  ·  " + (ns === 1 ? "1 session" : ns + " sessions") + " match" : "Searching your folders…"
-      if (root._found.truncated) return found + ". The search stopped early: more letters narrow it."
+      if (root.searchWords === "") return "Type two letters or more to search your folders."
+      if (root.foundTruncated) return found + ". The search stopped early: more letters narrow it."
       return found + ". Enter opens a folder."
     }
     if (root.activeKind === "recent") return "Every folder, newest first."
@@ -632,7 +633,8 @@ Item {
   readonly property string newLine: {
     var where = Model.shortPath(root.newCwd, root.home)
     if (root.newState === "none" && root.searching)
-      return root.finding ? "Looking for folders that match…" : "No folder matches. Pick one on the left, or type a path."
+      return root.searchWords === "" ? "Type two letters or more to find a folder."
+        : (root.finding ? "Looking for folders that match…" : "No folder matches. Pick one on the left, or type a path.")
     if (root.newState === "none") return "Pick a folder on the left, type a path such as ~/code/api, or choose No project."
     if (root.newState === "home") return "Not in your home folder itself. Pick a folder inside it, or No project."
     if (root.newCwd === root.workspacePath)
@@ -848,9 +850,11 @@ Item {
     return t.replace(/\s/g, "").length >= 2 && t.length <= 80 ? t : ""
   }
   readonly property bool canFind: !!root.service && typeof root.service.findDirs === "function"
-  readonly property var foundEntries: root.searchWords !== "" && root._found.q === root.searchWords && Array.isArray(root._found.entries)
-    ? root._found.entries : []
-  readonly property bool finding: root.canFind && root.searchWords !== "" && root._found.q !== root.searchWords
+  readonly property var foundNow: root.searchWords !== "" && root._found.hasOwnProperty(root.searchWords) ? root._found[root.searchWords] : null
+  readonly property var foundEntries: root.foundNow !== null && Array.isArray(root.foundNow.entries) ? root.foundNow.entries : []
+  readonly property bool foundTruncated: root.foundNow !== null && root.foundNow.truncated === true
+  readonly property bool foundFailed: root.foundNow !== null && root.foundNow.failed === true
+  readonly property bool finding: root.canFind && root.searchWords !== "" && root.foundNow === null
   // Folders found for typed words, above the sessions.
   readonly property var folderRows: {
     if (root.queryPath !== "") return []
@@ -862,15 +866,21 @@ Item {
   // Asks for the folders that match the words now typed; a newer search replaces one still waiting.
   function findFolders() {
     var q = root.searchWords
-    if (!root.active || q === "" || !root.canFind || root._found.q === q) return
+    // A failed search is asked again once the typing rests on the same words again.
+    if (!root.active || q === "" || !root.canFind || (root._found.hasOwnProperty(q) && root._found[q].failed !== true)) return
     var gen = root._openGen
-    var known = []
-    for (var cwd in root.countsByCwd)
-      if (cwd.indexOf(root.home + "/") === 0 && known.length < 64) known.push(cwd)
-    root.service.findDirs(q, known, function (res) {
+    // The folders with the most sessions go along, to rank higher.
+    var known = Object.keys(root.countsByCwd).filter(function (cwd) { return cwd.indexOf(root.home + "/") === 0 })
+    known.sort(function (a, b) { return root.countsByCwd[b].total - root.countsByCwd[a].total })
+    root.service.findDirs(q, known.slice(0, 64), function (res) {
       if (gen !== root._openGen || !res || res.code === "superseded") return
-      root._found = { q: q, entries: res.ok === true && Array.isArray(res.entries) ? res.entries : [],
-                      truncated: res.ok === true && res.truncated === true, failed: res.ok !== true }
+      var next = {}
+      var keys = Object.keys(root._found)
+      // The newest twenty answers are kept, so going back a letter is instant.
+      for (var i = Math.max(0, keys.length - 19); i < keys.length; i++) if (keys[i] !== q) next[keys[i]] = root._found[keys[i]]
+      next[q] = { entries: res.ok === true && Array.isArray(res.entries) ? res.entries : [],
+                  truncated: res.ok === true && res.truncated === true, failed: res.ok !== true }
+      root._found = next
     })
   }
 
@@ -1044,7 +1054,7 @@ Item {
     root._checking = ({})
     root._pendingNew = null
     root._walkAsked = ({})
-    root._found = ({ q: "", entries: [], truncated: false, failed: false })
+    root._found = ({})
     var opened = {}
     if (root.home !== "") opened[root.home] = true
     root.expanded = opened
@@ -1446,7 +1456,7 @@ Item {
     trailing: root.loading ? "Reading sessions…"
       : (root.query !== "" || root.filter !== "all"
         ? (root.folderRows.length > 0
-          ? root.foundEntries.length + (root._found.truncated ? "+" : "") + (root.foundEntries.length === 1 ? " folder" : " folders") + "  ·  " : "")
+          ? root.foundEntries.length + (root.foundTruncated ? "+" : "") + (root.foundEntries.length === 1 ? " folder" : " folders") + "  ·  " : "")
           + root.rows.length + " of " + root.countFor(root.filter)
         : root.countFor("all") + (root.countFor("all") === 1 ? " session" : " sessions"))
   }
@@ -2208,7 +2218,7 @@ Item {
           width: Math.max(0, Math.min(implicitWidth, parent.width - recoverText.implicitWidth - parent.spacing))
           textFormat: Text.PlainText
           text: root.finding ? "Searching your folders for \"" + root.query + "\"…"
-            : (root._found.failed ? "Folders could not be searched. No sessions match \"" + root.query + "\"."
+            : (root.foundFailed ? "Folders could not be searched. No sessions match \"" + root.query + "\"."
               : "No folder or session matches \"" + root.query + "\".")
           color: root.theme.strong
           elide: Text.ElideRight

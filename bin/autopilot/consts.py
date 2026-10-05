@@ -167,7 +167,8 @@ WORKSPACE_NAME = "AutoPilot"
 # The folder search (finder.py): how deep, how much and how long it reads, how many folders it
 # answers, and the folders it lists by name but never goes into.
 FIND_DEPTH = 8
-FIND_ENTRIES = 60000
+FIND_ENTRIES = 200000
+FIND_DIR_ENTRIES = 5000
 FIND_FOLDERS = 20000
 FIND_DEADLINE_S = 1.5
 FIND_LIMIT = 40

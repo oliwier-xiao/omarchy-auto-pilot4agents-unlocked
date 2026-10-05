@@ -905,9 +905,25 @@ Item {
     }, function () { return root.since(300) })
     step(C, function (C) {
       check(C, root.calls("findDirs").length === 3, "a third search for notesx")
+      // Back a letter before notesx answers: notes is answered already, and notesx's late
+      // answer lands under its own words.
+      key(Qt.Key_Backspace)
+      check(C, sheet.searchWords === "notes" && !sheet.finding && sheet.folderRows[0] === "/home/tester/notes", "back to notes at once")
+      svc.flush("findDirs")
+      check(C, sheet.searchWords === "notes" && !sheet.finding && sheet.folderRows[0] === "/home/tester/notes", "a late answer for notesx changes nothing")
+      root.typeText("x")
+      root.mark = Date.now()
+    }, function () { return root.since(300) })
+    step(C, function (C) {
+      check(C, !sheet.finding && root.calls("findDirs").length === 3, "notesx was answered already, so nothing is asked again")
+      root.typeText("y")
+      root.mark = Date.now()
+    }, function () { return root.since(300) })
+    step(C, function (C) {
+      check(C, root.calls("findDirs").length === 4, "notesxy is asked for")
       sheet.open({})
       svc.flush("findDirs")
-      check(C, sheet._found.q === "" && sheet.folderRows.length === 0, "its answer, for an earlier open, is dropped")
+      check(C, Object.keys(sheet._found).length === 0 && sheet.folderRows.length === 0, "its answer, for an earlier open, is dropped")
     }, function () { return root.since(300) })
   }
 

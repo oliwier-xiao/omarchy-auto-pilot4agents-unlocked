@@ -874,8 +874,9 @@ Item {
     return Object.keys(root._readInflight).length
   }
 
-  // A verb marked `latest` keeps only the newest request waiting; the one it replaces is told
-  // "superseded". Every other read merges its callbacks into the one already waiting.
+  // A verb marked `latest` keeps only the newest request waiting; the waiting one it replaces is
+  // told "superseded" (one already running still answers, for the words it was asked: callers
+  // keep answers by what they asked). Every other read merges its callbacks into the one waiting.
   function _mergeRead(existing, req) {
     if (root._verbs[req.verb] && root._verbs[req.verb].latest === true) {
       if (existing) Qt.callLater(function () { root._deliver(existing, root._qmlError("superseded")) })

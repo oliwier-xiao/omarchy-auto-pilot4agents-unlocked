@@ -13,8 +13,9 @@ The walk is bounded and reads names only:
     and names that are not printable UTF-8 are never entered; folders such as node_modules or
     build, and Go's module cache (pkg/mod), are listed by name but never entered, since what is
     inside them is not where people work;
-  - at most FIND_ENTRIES directory entries and FIND_FOLDERS folders within FIND_DEADLINE_S, after
-    which the answer says it stopped early;
+  - at most FIND_DIR_ENTRIES entries of any one folder (a Downloads folder with 60,000 files is
+    not allowed to use up the search), and at most FIND_ENTRIES entries and FIND_FOLDERS folders
+    in all within FIND_DEADLINE_S, after which the answer says it stopped early;
   - nothing is opened or read inside a folder: the folders that are answered get one fstat (whose
     folder it is) and one lstat of their .git entry (whether it is a git checkout).
 
@@ -120,19 +121,29 @@ def _osa(a, b, limit):
 
 def _in_order(word, folded, starts):
     """fzf-style score for word's letters appearing in order in folded, with their positions, or
-    (0, None). A letter at a word start or right after the previous one scores more; gaps cost."""
-    positions = []
-    at = 0
-    for ch in word:
+    (0, None). The first letter has to start a word ("pr" scattered inside "spray" is no match);
+    every word start where it does is tried, and the best placement wins. A letter at a word start
+    or right after the previous one scores more; gaps cost."""
+    best, best_spans = 0, None
+    for s in starts:
+        if folded[s:s + 1] != word[:1]:
+            continue
+        score, spans = _in_order_from(word, folded, starts, s)
+        if score > best:
+            best, best_spans = score, spans
+    return best, best_spans
+
+
+def _in_order_from(word, folded, starts, first):
+    positions = [first]
+    at = first + 1
+    for ch in word[1:]:
         found = folded.find(ch, at)
         if found < 0:
             return 0, None
         positions.append(found)
         at = found + 1
     start_set = set(starts)
-    # The letters have to start a word somewhere: "pr" scattered inside "spray" is no match.
-    if positions[0] not in start_set:
-        return 0, None
     score, last = 0, None
     for n, p in enumerate(positions):
         bonus = 8 if p in start_set else 0
@@ -191,13 +202,16 @@ def score_word(word, name):
         return score, marks(spans)
     if len(word) < 4:
         return 0, []
-    limit = 1 if len(word) <= 7 else 2
+    # One letter off: missing, extra, wrong, or two neighbours swapped. Two off is mostly noise.
+    limit = 1
     best = limit + 1
     best_span = None
     bounds = starts + [len(folded)]
     for k, s in enumerate(starts):
         end = next((b for b in bounds[k + 1:] if b > s), len(folded))
-        piece = folded[s:end].strip(" -_.")
+        raw = folded[s:end]
+        piece = raw.strip(" -_.")
+        lead = len(raw) - len(raw.lstrip(" -_."))
         # A typo keeps the first or the second letter: cheap to check, and it keeps a home with
         # thousands of folders inside the deadline.
         if not piece or (piece[0] != word[0] and piece[1:2] != word[1:2]):
@@ -205,7 +219,7 @@ def score_word(word, name):
         for candidate in (piece, piece[:len(word)]):
             d = _osa(word, candidate, limit)
             if d < best:
-                best, best_span = d, (s, s + len(candidate))
+                best, best_span = d, (s + lead, s + lead + len(candidate))
     if best <= limit:
         return _TYPO - 60 * best, marks([best_span]) if best_span else []
     return 0, []
@@ -259,7 +273,7 @@ def find_dirs(query, known=()):
     home = folders._home_real()
     known = frozenset(known)
     answer = {"home": home, "q": query, "entries": [], "truncated": False, "reason": None,
-              "scanned": 0, "skipped": 0}
+              "scanned": 0, "skipped": 0, "cut": 0}
     if not words:
         return answer
     try:
@@ -270,7 +284,7 @@ def find_dirs(query, known=()):
     uid = os.getuid()
     deadline = time.monotonic() + consts.FIND_DEADLINE_S
     hits = []
-    entries = folders_seen = skipped = 0
+    entries = folders_seen = skipped = cut = 0
     stop = None
     try:
         home_dev = os.fstat(home_fd).st_dev
@@ -288,7 +302,10 @@ def find_dirs(query, known=()):
                     if os.fstat(fd).st_dev != home_dev:
                         continue
                     with os.scandir(fd) as it:
-                        for entry in it:
+                        for here, entry in enumerate(it):
+                            if here >= consts.FIND_DIR_ENTRIES:
+                                cut += 1
+                                break
                             entries += 1
                             if entries > consts.FIND_ENTRIES:
                                 stop = "entries"
@@ -338,7 +355,7 @@ def find_dirs(query, known=()):
     finally:
         os.close(home_fd)
     answer.update({"entries": rows, "truncated": stop is not None, "reason": stop,
-                   "scanned": folders_seen, "skipped": skipped})
+                   "scanned": folders_seen, "skipped": skipped, "cut": cut})
     return _fit(answer)
 
 

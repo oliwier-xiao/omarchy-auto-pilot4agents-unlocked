@@ -6,6 +6,7 @@ under limits.lock or by atomic replace). `workspace --create` makes the No proje
 """
 
 import re
+import unicodedata
 
 from . import agents, consts, finder, folders, fsio, limits_history, sessions, timeutil, usage, windows
 from .errors import ApError
@@ -112,7 +113,11 @@ def cmd_find_dirs(argv, payload):
     if not isinstance(payload, dict) or not set(payload) <= {"q", "known"} or "q" not in payload:
         raise ApError("bad_args")
     query, known = payload["q"], payload.get("known", [])
-    if not isinstance(query, str) or not 0 < len(query) <= consts.FIND_QUERY_MAX or not query.isprintable():
+    if not isinstance(query, str) or not 0 < len(query) <= consts.FIND_QUERY_MAX:
+        raise ApError("bad_args")
+    # Zero-width joiners and the like (inside emoji, pasted text) carry no letters: left out.
+    query = "".join(ch for ch in query if unicodedata.category(ch) != "Cf")
+    if not query.isprintable():
         raise ApError("bad_args")
     if len("".join(query.split())) < 2:
         raise ApError("bad_args")

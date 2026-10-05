@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "bin"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
-from autopilot import cli_scan, consts, folders, main, sessions  # noqa: E402
+from autopilot import cli_scan, consts, finder, folders, main, sessions  # noqa: E402
 from autopilot.errors import ApError  # noqa: E402
 from test_scan import DAY, ScanCase, uid  # noqa: E402
 
@@ -256,6 +256,9 @@ class FindDirsTests(ScanCase):
         self.assertEqual(self.paths("projets")[0], "Projects", "a letter left out")
         self.assertEqual(self.paths("projcets")[0], "Projects", "two letters swapped")
         self.assertEqual(self.paths("piktures"), ["Pictures"], "a letter off")
+        self.assertEqual(self.paths("pikturez"), [], "two letters off is noise")
+        # Letters in order may start at a later word when the first place they occur starts none.
+        self.assertGreater(finder.score_word("prt", "sprint-prototype")[0], 0)
         self.assertEqual(self.paths("last man")[:2], ["code/Last-Man-Hooping", "code/last-man-site"])
         self.assertEqual(set(self.paths("lastman")), {"code/Last-Man-Hooping", "code/last-man-site"}, "separators left out")
         self.assertEqual(self.paths("code last")[0], "code/Last-Man-Hooping", "a word may name a folder above it")
@@ -317,7 +320,14 @@ class FindDirsTests(ScanCase):
         self.patch(consts, "FIND_FOLDERS", 20000)
         self.patch(consts, "FIND_ENTRIES", 50)
         self.assertEqual(self.find("d001")["reason"], "entries")
-        self.patch(consts, "FIND_ENTRIES", 60000)
+        self.patch(consts, "FIND_ENTRIES", 200000)
+        # One crowded folder may not use up the search: it is read only so far, and the walk goes on.
+        self.patch(consts, "FIND_DIR_ENTRIES", 100)
+        crowded = self.find("deep target")
+        self.assertEqual(([e["path"][len(os.path.realpath(self.home)) + 1:] for e in crowded["entries"]], crowded["truncated"]),
+                         (["a/b/c/deep-target"], False))
+        self.assertGreaterEqual(crowded["cut"], 1)
+        self.patch(consts, "FIND_DIR_ENTRIES", 5000)
         self.patch(consts, "FIND_DEADLINE_S", 0)
         self.assertEqual(self.find("d001")["reason"], "time")
         self.patch(consts, "FIND_DEADLINE_S", 1.5)
@@ -348,7 +358,9 @@ class FindDirsTests(ScanCase):
             self.assertEqual(caught.exception.code, "bad_args")
         self.assertEqual(self.paths("projects"), ["Projects"])
         answer = cli_scan.cmd_find_dirs([], {"q": "projects"})
-        self.assertEqual(sorted(answer), ["entries", "home", "ok", "q", "reason", "scanned", "skipped", "truncated"])
+        self.assertEqual(sorted(answer), ["cut", "entries", "home", "ok", "q", "reason", "scanned", "skipped", "truncated"])
+        # Zero-width joiners (inside emoji, pasted text) carry no letters and are left out.
+        self.assertEqual(self.paths("proj\u200dects"), ["Projects"])
 
 
 class WorkspaceTests(ScanCase):
