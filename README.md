@@ -226,7 +226,7 @@ There are exactly four levels. The helper refuses any other value, whether it co
 | Codex | Automatic review in the workspace-write sandbox. A reviewer approves or denies what would ask. | No approvals and no sandbox. Codex runs any command with your user's access. |
 | Gemini CLI | Auto edit. File edits are approved. Shell commands would ask, so they are denied. | YOLO mode. Every tool call is approved, shell commands included. |
 | Cursor Agent | Not offered. Cursor has no automatic review of its own. | Force mode, workspace trusted, sandbox off. Cursor applies edits and runs commands without asking. |
-| Pi | Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands. | Every built-in tool: read, bash, edit, write, grep, find and ls. |
+| Pi | Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands, but Pi keeps no edit inside the working folder: it can write any file you can. | Every built-in tool: read, bash, edit, write, grep, find and ls. |
 
 Plan and Unattended never widen what an agent may do: a job only does what the agent's own configuration already allows without asking. Auto hands each decision to the agent's own automatic review, which can be wrong. Full access has no checks at all, and the job runs with your user's access to your files, your shell and the network. The systemd limits under [The timer](#the-timer) still apply, and the prompt still travels only on standard input.
 

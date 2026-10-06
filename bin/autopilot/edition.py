@@ -187,7 +187,7 @@ LEVELS = (
                 "initPermissionMode": None,
             },
             "pi": {
-                "caption": "Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands.",
+                "caption": "Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands, but Pi keeps no edit inside the working folder: it can write any file you can.",
                 "argv": _PI_BASE + ["--tools", "read,grep,find,ls,edit,write"],
                 "env": dict(_PI_ENV),
                 "initPermissionMode": None,
