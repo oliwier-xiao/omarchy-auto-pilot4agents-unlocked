@@ -824,17 +824,21 @@ def cursor_preflight(cwd, home, env):
         return verdict
 
     real = os.path.realpath(workspace)
+    home_real = os.path.realpath(home_path)
     folders = _walk_to_git_root(real)
     # Cursor's own project files are read from the folder up to the git root: its CLI rules, and
-    # the hooks and MCP servers it would run. Each is refused anywhere on that walk.
+    # the hooks and MCP servers it would run. Each is refused anywhere on that walk. The user's own
+    # ~/.cursor is theirs, so the home folder itself is never one of a project's rules.
     for folder in folders:
+        if folder == home_real:
+            continue
         if any(os.path.lexists(os.path.join(folder, ".cursor", name))
                for name in ("cli.json", "hooks.json", "mcp.json")):
             return "cursor_project_rules"
     # Cursor imports a Claude config from the repository root (settings.json and the untracked
     # settings.local.json), applying its allow rules and hooks. The user's own ~/.claude is theirs.
     root = folders[-1]
-    if root != os.path.realpath(home_path):
+    if root != home_real:
         for name in ("settings.json", "settings.local.json"):
             settings_path = os.path.join(root, ".claude", name)
             settings, refused = _read_config(settings_path, _CONFIG_CAP)
