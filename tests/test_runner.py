@@ -2856,6 +2856,14 @@ class SandboxSpecTests(unittest.TestCase):
         self.assertIn(os.path.join(home, ".cache", ".gemini"), spec["rw"])
         self.assertIn(os.path.join(home, ".gemini"), spec["ro"])
         self.assertTrue(all(os.path.join(home, ".gemini") != p for p in spec["rw"]))
+        # The admin policy it is started with is readable, and it is the only file of the plugin that is:
+        # without it Gemini CLI reports a policy file error and the run is stopped.
+        policy = os.path.realpath(harness.gemini_policy_path())
+        self.assertIn(policy, spec["ro"])
+        self.assertIn(harness.gemini_policy_path(), cmd["argv"])
+        plugin = os.path.realpath(fsio.plugin_dir())
+        granted = spec["rw"] + spec["ro"] + spec["mkdir"] + spec["rwFiles"]
+        self.assertEqual([p for p in granted if p == plugin or p.startswith(plugin + "/")], [policy])
 
     def test_pi_auto_session_writable_config_mkdir_only(self):
         cmd = self.build("pi", "auto")

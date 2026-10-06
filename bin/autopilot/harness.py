@@ -570,6 +570,10 @@ def sandbox_spec(harness, level_id, cwd, env, exec_prefix, run_dir):
         ro.append(os.path.join(home, ".gemini"))
         predirs.append(runtime)
         extra_env["SANDBOX"] = "sandbox-exec"
+        if gemini_policy_wanted(level_id):
+            # The plugin's own admin policy, and nothing else of the plugin: Gemini CLI reads it at
+            # start, and without it the run stops (classify: policy_error) rather than go on unheld.
+            ro.append(os.path.realpath(gemini_policy_path()))
     elif harness == "pi":
         # Pi's config folder is read-only except that proper-lockfile needs to make lock folders in
         # it; the session folder (set in the env) is writable. The sign-in stays readable but a
