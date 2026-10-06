@@ -106,7 +106,7 @@ DIAG_RE = re.compile(r"^ap4a: (E_NOT_SYSTEMD|STALE|PAUSED|NEEDS_CONFIRM|MISSED|S
                      r"E_INTERNAL) job=[0-9a-f]{16} gen=[0-9]+$")
 ALLOWED_ENV = {"HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_CONFIG_HOME",
                "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "LANG", "NO_COLOR", "TERM", "PATH",
-               "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG",
+               "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_CONFIG_" + "CONTENT",
                "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_CRON",
                "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK", "PI_CODING_AGENT_SESSION_DIR"}
 V1_HARNESSES = ("claude", "opencode", "codex", "gemini")
@@ -181,6 +181,7 @@ class Sandbox(unittest.TestCase):
 
         self.p.set(fsio, "check_trusted_file", trusted)
         self.p.set(systemd, "clock_synced", lambda: True)
+        self.p.set(harness, "_CODEX_SYSTEM_CONFIG", os.path.join(self.tmp, "etc-codex-config.toml"))
         self.p.set(consts, "AGENT_TERM_GRACE_S", 1)
         self.agent_log = os.path.join(self.home, "fake-agent.log")
         # Discovery must never reach a real agent CLI (for example /usr/bin/opencode): every candidate
@@ -375,6 +376,45 @@ def expected_argv(job, exec_prefix, run_dir, gen):
 
 class HarnessTests(Sandbox):
 
+    def test_codex_mcp_servers_are_turned_off_below_auto(self):
+        # Codex runs an MCP server's tools outside its sandbox, and one that says it only reads without
+        # asking, so each server in the user's and the system's Codex settings is turned off by name.
+        user = os.path.join(self.home, ".codex", "config.toml")
+        os.makedirs(os.path.dirname(user), mode=0o700)
+        with open(user, "w") as handle:
+            handle.write('model = "gpt-5.5"\n[mcp_servers.context7]\ncommand = "npx"\n'
+                         '[mcp_servers.exa-search]\nurl = "https://example.invalid/mcp"\n')
+        with open(harness._CODEX_SYSTEM_CONFIG, "w") as handle:
+            handle.write('[mcp_servers.corp_tools]\ncommand = "corp"\nenabled = true\n')
+        off = ["-c", "mcp_servers.context7.enabled=false", "-c", "mcp_servers.corp_tools.enabled=false",
+               "-c", "mcp_servers.exa-search.enabled=false"]
+        self.assertEqual(harness.codex_mcp_servers(self.home), ["context7", "corp_tools", "exa-search"])
+        for level in edition.LEVEL_IDS:
+            job = make_job("codex", level=level, mode="new", job_id="0123456789abcdef", allow_non_git=True)
+            cmd = harness.build_command(job, exec_prefix=["/opt/codex"], run_dir="/s/runs", gen=1)
+            start, end = cmd["levelSlot"]
+            if level in edition.CODEX_MCP_OFF_LEVELS:
+                self.assertEqual(cmd["argv"][end:end + len(off)], off, level)
+                self.assertEqual(cmd["argv"][start:end][2:6], ["--disable", "apps", "--disable", "plugins"], level)
+            else:
+                self.assertNotIn("mcp_servers.context7.enabled=false", cmd["argv"], level)
+        self.assertEqual(edition.level("plan")["harness"]["codex"]["argv"][-2:], ["-c", 'web_search="disabled"'])
+        # Settings that cannot be read in full stop the run; the preview leaves that to the gate.
+        job = make_job("codex", level="plan", mode="new", job_id="0123456789abcdef", allow_non_git=True)
+        for bad in ("[mcp_servers\n", '[mcp_servers."a.b"]\ncommand = "x"\n', "mcp_servers = 3\n",
+                    "[mcp_servers.x]\ncommand = 1\n\xff"):
+            with open(user, "w", errors="surrogateescape") as handle:
+                handle.write(bad)
+            self.assertIsNone(harness.codex_mcp_servers(self.home), bad)
+            with self.assertRaises(ApError) as caught:
+                harness.build_command(job, exec_prefix=["/opt/codex"], run_dir="/s/runs", gen=1)
+            self.assertEqual(caught.exception.code, "codex_mcp_config")
+            self.assertEqual(harness.codex_mcp_off("plan", self.home, strict=False), [])
+        os.remove(user)
+        os.remove(harness._CODEX_SYSTEM_CONFIG)
+        self.assertEqual(harness.codex_mcp_servers(self.home), [])
+        self.assertEqual(harness.codex_mcp_off("plan", self.home), [])
+
     def test_build_command_golden(self):
         literal = make_job("claude", level="plan", mode="resume", job_id="0123456789abcdef",
                            session="3f2a0c19-0000-4000-8000-000000000001")
@@ -388,7 +428,8 @@ class HarnessTests(Sandbox):
         literal = make_job("codex", level="unattended", mode="new", job_id="0123456789abcdef", allow_non_git=True,
                            model="gpt-5.5")
         cmd = harness.build_command(literal, exec_prefix=["/opt/codex"], run_dir="/s/runs", gen=2)
-        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "--ignore-rules", "-s", "workspace-write", "--json",
+        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "--ignore-rules", "-s", "workspace-write",
+                                       "--disable", "apps", "--disable", "plugins", "--json",
                                        "--color", "never", "-o", "/s/runs/0123456789abcdef-g2.last.txt",
                                        "--skip-git-repo-check", "-m", "gpt-5.5", "-"])
         literal = make_job("gemini", level="unattended", mode="new", job_id="0123456789abcdef",
@@ -410,7 +451,7 @@ class HarnessTests(Sandbox):
                            session="ses_abcdefgh12345678", model="anthropic/claude-opus-5")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/opencode"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/usr/bin/opencode", "run", "--format", "json",
-                                       "--pure", "--agent", "plan", "-m", "anthropic/claude-opus-5",
+                                       "--agent", "autopilot-read-only", "-m", "anthropic/claude-opus-5",
                                        "-s", "ses_abcdefgh12345678", "--fork"])
 
         count = 0
@@ -471,12 +512,17 @@ class HarnessTests(Sandbox):
                 if name != "opencode":
                     self.assertNotIn("OPENCODE_PERMISSION", cmd["env"])
                 else:
-                    values = set(json.loads(cmd["env"]["OPENCODE_PERMISSION"]).values())
+                    rules = json.loads(cmd["env"]["OPENCODE_PERMISSION"])
                     # Only the unlocked levels may allow anything outright.
                     if level["id"] in ("auto", "full"):
-                        self.assertTrue(values <= {"deny", "al" + "low"}, values)
+                        self.assertTrue(set(rules.values()) <= {"deny", "al" + "low"}, rules)
                     else:
-                        self.assertTrue(values <= {"deny"}, values)
+                        self.assertEqual((list(rules)[0], rules["*"]), ("*", "deny"), rules)
+                        allowed = {k for k, v in rules.items()
+                                   if "al" + "low" in (set(v.values()) if isinstance(v, dict) else {v})}
+                        self.assertLessEqual(allowed, set(edition.OPENCODE_READ_ONLY_TOOLS), allowed)
+                        self.assertEqual(cmd["argv"][start:end], ["--agent", edition.OPENCODE_READ_ONLY_AGENT])
+                        self.assertIn(edition.OPENCODE_READ_ONLY_AGENT, cmd["env"]["OPENCODE_CONFIG_" + "CONTENT"])
         self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
 
     def test_agent_env_allowlist(self):
@@ -754,6 +800,18 @@ class SuperviseTests(SuperviseBase):
         result = classify.classify(out["state"], out["run"], level_id="plan")
         self.assertEqual(result["outcome"], "boundary_mismatch")
         self.assertEqual(out["state"]["initMode"], "default")
+
+    def test_auto_mode_off_is_stopped_with_its_own_reason(self):
+        # Claude Code starts in default mode where Auto mode is not on offer: still stopped at the first
+        # line, but failed with a reason that says why rather than as a boundary mismatch.
+        out = self.run_stub("claude", "wrong_init_mode", level="auto")
+        self.assertEqual((out["run"]["killedBy"], out["state"]["killDetail"]), ("boundary", "auto_off"))
+        self.assertLess(out["elapsed"], 10)
+        result = classify.classify(out["state"], out["run"], level_id="auto")
+        self.assertEqual((result["outcome"], result["detail"], result["reason"]),
+                         ("failed", "auto_off", "claude_auto_model"))
+        action = trigger.postrun(out["job"], result, int(time.time()), None)
+        self.assertEqual((action["status"], action["reason"]), ("failed", "claude_auto_model"))
 
     def test_init_tools_mismatch_kill(self):
         # Claude ignores a --tools name it does not know, so the tools it reports at start are checked.
@@ -2640,7 +2698,8 @@ class V2RunVerbTests(RunVerbBase):
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
                  "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
-                 "sandbox_unavailable": "sandbox_unavailable"}
+                 "opencode_zen_tools": "opencode_zen_tools", "claude_auto_model": "claude_auto_model",
+                 "codex_mcp_config": "codex_mcp_config", "sandbox_unavailable": "sandbox_unavailable"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")

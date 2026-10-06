@@ -246,6 +246,50 @@ class ClaudeCodexGeminiTests(PaidCase):
             self.assertIsNone(paid.claude_rate_event_verdict(info, False), info)
         self.assertIsNone(paid.claude_rate_event_verdict({"isUsingOverage": True}, True))
 
+    def test_claude_auto_needs_a_model_with_auto_mode(self):
+        # Claude Code 2.1.289 starts an older model in default mode, which the runner would stop at once.
+        ok = paid.claude_auto_model_ok
+        for model in ("haiku", "haiku[1m]", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5",
+                      "claude-opus-4-5", "claude-opus-4-1", "claude-sonnet-4-20250514", "claude-3-7-sonnet-latest",
+                      "claude-3-5-haiku-20241022"):
+            self.assertFalse(ok(model, {}), model)
+        for model in ("opus", "sonnet", "fable", "opus[1m]", "claude-opus-4-6", "claude-sonnet-4-6",
+                      "claude-opus-4-8", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-5", "best", None, ""):
+            self.assertTrue(ok(model, {}), model)
+        # The settings model counts when the job names none, and an alias goes through its pin.
+        self.assertFalse(ok(None, {"model": "haiku"}))
+        self.assertTrue(ok("opus", {"model": "haiku"}))
+        self.assertFalse(ok("sonnet", {"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-5"}}))
+        self.assertTrue(ok("haiku", {"env": {"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4-6[1m]"}}))
+        self.assertTrue(ok("opus", {"env": []}))
+
+        auto = [lv["id"] for lv in edition.LEVELS if paid.claude_auto_level(lv["id"])]
+        self.assertEqual(auto, ["auto"])
+        for level in [lv["id"] for lv in edition.LEVELS if "claude" in lv["harness"]]:
+            for phase in ("preview", "arm", "prefire"):
+                got = self.gate(self.job("claude", level=level, model="haiku"), phase=phase)["code"]
+                self.assertEqual(got, "claude_auto_model" if level in auto else None, (level, phase))
+                self.assertIsNone(self.gate(self.job("claude", level=level, model="opus"), phase=phase)["code"])
+        self.write(".claude/settings.json", json.dumps({"model": "claude-haiku-4-5"}))
+        self.assertEqual(self.gate(self.job("claude", level="auto"))["code"], "claude_auto_model")
+        self.assertIsNone(self.gate(self.job("claude", level="auto", model="sonnet"))["code"])
+        self.assertEqual(paid.REASON_FOR_CODE["claude_auto_model"], "claude_auto_model")
+
+    def test_codex_refused_below_auto_when_its_mcp_servers_cannot_be_known(self):
+        # Each MCP server in the Codex settings is turned off by name below Auto, so unreadable settings stop the job.
+        self.patch(harness, "_CODEX_SYSTEM_CONFIG", os.path.join(self.tmp, "etc-codex-config.toml"))
+        self.write(".codex/config.toml", "[mcp_servers\n")
+        for level in [lv["id"] for lv in edition.LEVELS if "codex" in lv["harness"]]:
+            for phase in ("preview", "arm", "prefire"):
+                code = self.gate(self.job("codex", level=level), phase=phase)["code"]
+                if level in edition.CODEX_MCP_OFF_LEVELS:
+                    self.assertEqual(code, "codex_mcp_config", (level, phase))
+                else:
+                    self.assertNotEqual(code, "codex_mcp_config", (level, phase))
+        self.write(".codex/config.toml", '[mcp_servers.context7]\ncommand = "npx"\n')
+        self.assertNotEqual(self.gate(self.job("codex"), phase="preview")["code"], "codex_mcp_config")
+        self.assertEqual(paid.REASON_FOR_CODE["codex_mcp_config"], "codex_mcp_config")
+
     def test_codex_login_lines_table(self):
         table = {
             "Logged in using ChatGPT": "chatgpt",
@@ -572,6 +616,24 @@ class OpenCodeTests(PaidCase):
         self.assertEqual(paid.classify_opencode("opencode/big-pickle", None, catalogue, mtime, self.now, False, None),
                          "unknown")
 
+    def test_opencode_free_zen_refused_where_a_tool_is_off(self):
+        # Zen's free models answer only a run that offers every tool (HTTP 403 otherwise, OpenCode 1.18.34),
+        # so a level that turns a tool off refuses them at once instead of failing at the provider.
+        self.patch(paid, "opencode_billing", lambda *a, **k: {"billing": "zen_free", "resolvedModel": "opencode/big-pickle",
+                                                                "pending": False})
+        levels = [lv["id"] for lv in paid.edition.LEVELS if "opencode" in lv["harness"]]
+        for level in levels:
+            job = self.job("opencode", level=level, model="opencode/big-pickle", allowPaid=True)
+            expected = "opencode_zen_tools" if paid.opencode_hides_tools(level) else None
+            for phase in ("preview", "arm", "prefire"):
+                self.assertEqual(self.gate(job, phase=phase)["code"], expected, (level, phase))
+        self.assertTrue(paid.opencode_hides_tools("plan"))
+        self.assertFalse(paid.opencode_hides_tools("full"))  # Full offers every tool
+        self.assertFalse(paid.opencode_hides_tools("no-such-level"))
+        self.patch(paid, "opencode_billing", lambda *a, **k: {"billing": "other", "resolvedModel": "openrouter/x",
+                                                                "pending": False})
+        self.assertIsNone(self.gate(self.job("opencode", model="openrouter/x"), phase="arm")["code"])
+
     def test_opencode_go_contributor_name_trap(self):
         go_cost = {"input": 0.10, "output": 0.20}
         self.catalogue(S.free_catalogue(go_models=[S.cat_model("muse-spark-1.3-contributor", go_cost)]))
@@ -667,6 +729,9 @@ class OpenCodeTests(PaidCase):
         self.catalogue(S.free_catalogue())
         self.answer(["models", "opencode", "--verbose"], stdout=S.verbose_text(S.seven_free_blocks()))
         midnight_ms = (self.now // DAY + 1) * DAY * 1000
+        hides_tools = paid.opencode_hides_tools
+        # A free Zen model runs only at a level that offers every tool; the notes below are for one.
+        self.patch(paid, "opencode_hides_tools", lambda level: False)
         free = self.gate(self.job("opencode", model="opencode/big-pickle"))
         self.assertEqual((free["ok"], free["billing"], free["notes"], free["resetAtMs"]),
                          (True, "zen_free", ["subscription_only", "zen_free"], midnight_ms))
@@ -682,6 +747,9 @@ class OpenCodeTests(PaidCase):
         self.assertEqual(on_free["notes"], ["paid_on", "zen_free"])
         on_go = self.gate(self.job("opencode", model="opencode-go/muse-spark-1.3-contributor", allowPaid=True))
         self.assertEqual(on_go["notes"], ["paid_on", "go_plan"])
+        self.patch(paid, "opencode_hides_tools", hides_tools)
+        self.assertEqual(self.gate(self.job("opencode", model="opencode/big-pickle"))["code"], "opencode_zen_tools")
+        self.assertIsNone(self.gate(self.job("opencode", model="opencode-go/muse-spark-1.3-contributor"))["code"])
 
 
 # --- Pi ------------------------------------------------------------------------------
@@ -1068,6 +1136,7 @@ class DeferTests(PaidCase):
                                           zen_limited_until=until))
 
         self.patch(models, "cached_billing", lambda model, _now: "zen_free")
+        self.patch(paid, "opencode_hides_tools", lambda level: False)  # a level that offers every tool
         seen = []
         self.patch(paid, "_zen_pending", lambda sd, at: seen.append((sd, at)) or until)
         marker = object()

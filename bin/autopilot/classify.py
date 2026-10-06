@@ -194,7 +194,9 @@ def _feed_claude(state, obj):
         if _claude_init_paid(source, state["allowPaid"]):
             return _kill(state, "api_key_source", "kill_paid")
         if state["expectedMode"] is not None and state["initMode"] != state["expectedMode"]:
-            return _kill(state, "init_mode")
+            # Claude Code starts in default mode when Auto mode is not on offer (model, fast mode, plan).
+            off = state["expectedMode"] == "auto" and state["initMode"] == "default"
+            return _kill(state, "auto_off" if off else "init_mode")
         # Claude drops a --tools name it does not know without a word, so the tools it reports are
         # checked against the level's list, and no MCP server may have started.
         if state["expectedTools"] is not None:
@@ -850,6 +852,8 @@ def _classify(state, run, level_id, now):
         limit = _limit(RATE_KIND.get(rate.get("rateLimitType"), "other"), _int_epoch(rate.get("resetsAt")), "event",
                        overage=True)
         return _outcome("limit", "overage_blocked", state, limit, reason="overage_blocked")
+    if killed == "boundary" and state.get("killDetail") == "auto_off":
+        return _outcome("failed", "auto_off", state, reason="claude_auto_model")
     if killed == "boundary":
         return _outcome("boundary_mismatch", state.get("killDetail") or "init_mode", state)
     # Gemini CLI goes on without an admin policy it could not load, so such a run was not held to its level.

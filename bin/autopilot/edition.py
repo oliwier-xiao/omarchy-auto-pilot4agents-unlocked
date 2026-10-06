@@ -52,13 +52,32 @@ _CLAUDE_CONFIG_WRITES = "Write(~/.claude/**),Edit(~/.claude/**),Write(.claude/**
 _GEMINI_NONE = "ap4a-none"
 _GEMINI_ISOLATION = ("--extensions", _GEMINI_NONE, "--allowed-mcp-server-names", _GEMINI_NONE)
 
-_OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
-                  '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
-# Unattended turns the same tools off as Plan rather than leaving them to ask. Nobody is there to
-# answer either way, but a tool that is off is never offered to the model, while one left to ask is
-# offered and checked call by call, which OpenCode does not do for every command.
-_OPENCODE_UNATTENDED = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
-                        '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
+# OpenCode checks a permission inside each of its own tools, so a tool that a plugin or an MCP server
+# adds, or a plugin's own tool of the same name (oh-my-openagent replaces task and adds a tmux shell),
+# is never asked about: it runs whatever edit and bash say. So "*" first turns every tool off, and a
+# tool that is off is never offered to the model. Only the read-only tools named next are back on;
+# .env files stay unread as OpenCode has them by default, and so do MCP servers' resources, which
+# OpenCode reads under the read permission as mcp:<server>:*. Nothing is left to ask: nobody is there
+# to answer, and a tool that asks is still offered.
+OPENCODE_READ_ONLY_TOOLS = ("read", "glob", "grep", "list", "todowrite", "skill")
+_OPENCODE_READ_ONLY = ('{"*":"deny",'
+                       '"read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow","mcp:*":"deny"},'
+                       '"glob":"allow","grep":"allow","list":"allow","todowrite":"allow","skill":"allow",'
+                       '"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
+                       '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
+# The rules an agent carries come after every global rule, OPENCODE_PERMISSION included, so the agent a
+# run would otherwise get can turn a tool back on: your own default_agent, or one a plugin sets up
+# (oh-my-openagent's default agent turns task back on). Plan and Unattended run an agent of the
+# plugin's own instead, defined with the same rules in the config OpenCode reads last.
+OPENCODE_READ_ONLY_AGENT = "autopilot-read-only"
+_OPENCODE_READ_ONLY_CONFIG = ('{"agent":{"' + OPENCODE_READ_ONLY_AGENT + '":{"mode":"primary","permission":'
+                              + _OPENCODE_READ_ONLY + '}}}')
+_OPENCODE_READ_ONLY_ENV = {"OPENCODE_PERMISSION": _OPENCODE_READ_ONLY,
+                           "OPENCODE_CONFIG_CONTENT": _OPENCODE_READ_ONLY_CONFIG}
+# Plan and Unattended keep your plugins here, as Auto and Full do, so a model that a plugin provides
+# (Anthropic through an auth plugin) runs at every level. A plugin's own code still runs inside
+# OpenCode, outside every rule above, and writes where it likes (oh-my-openagent keeps a .omo folder
+# in the working folder).
 # Auto allows the shell: the job runs confined by the OS sandbox (harness.sandbox_spec), so a
 # command cannot write outside the working folder (external_directory stays denied too) and cannot
 # reach the session bus to escape it. Reaching another folder would still ask, so it is rejected.
@@ -68,6 +87,15 @@ _OPENCODE_FULL = ('{"edit":"allow","bash":"allow","webfetch":"allow","websearch"
                   '"task":"allow","external_directory":"allow","doom_loop":"allow"}')
 _PI_BASE = ["--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve"]
 _PI_ENV = {"PI_OFFLINE": "1", "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1"}
+
+# Codex runs an MCP server's tools outside its sandbox, and calls one that says it only reads
+# (readOnlyHint) without asking even where nothing may be approved: on 0.160.0 such a tool wrote a file
+# outside the working folder of a read-only run. So at Plan and Unattended every MCP server in your Codex
+# settings is turned off by name (harness.codex_mcp_off; an empty mcp_servers table does not replace
+# yours), and so are ChatGPT apps and Codex plugins, which bring tools of their own. Plan also turns web
+# search off, as Plan does for every other agent.
+CODEX_MCP_OFF_LEVELS = ("plan", "unattended")
+_CODEX_EXTRAS_OFF = ["--disable", "apps", "--disable", "plugins"]
 
 # Closed enum. The helper refuses any level id that is not a key of this table,
 # whether it comes from stdin, jobs.json or IPC (R0 D8).
@@ -87,14 +115,16 @@ LEVELS = (
                 "initPermissionMode": "plan",
             },
             "opencode": {
-                "caption": "Built-in plan agent without plugins. Edits, shell, web and subagents are denied.",
-                "argv": ["--pure", "--agent", "plan"],
-                "env": {"OPENCODE_PERMISSION": _OPENCODE_PLAN},
+                "caption": ("A read-only agent of the plugin's own, with your plugins loaded. Only reads run: edits, "
+                            "shell, web, subagents and every tool from a plugin or an MCP server are off."),
+                "argv": ["--agent", OPENCODE_READ_ONLY_AGENT],
+                "env": dict(_OPENCODE_READ_ONLY_ENV),
                 "initPermissionMode": None,
             },
             "codex": {
-                "caption": "Read-only sandbox. Codex can read files but cannot write or reach the network.",
-                "argv": ["-s", "read-only"],
+                "caption": ("Read-only sandbox, with MCP servers, apps, plugins and web search off. Codex can read "
+                            "files but cannot write or reach the network."),
+                "argv": ["-s", "read-only"] + _CODEX_EXTRAS_OFF + ["-c", 'web_search="disabled"'],
                 "env": {},
                 "initPermissionMode": None,
             },
@@ -138,14 +168,17 @@ LEVELS = (
                 "initPermissionMode": "dontAsk",
             },
             "opencode": {
-                "caption": "Edits, shell, web and subagents are off, since nobody is there to approve them. Reads still work.",
-                "argv": [],
-                "env": {"OPENCODE_PERMISSION": _OPENCODE_UNATTENDED},
+                "caption": ("A read-only agent of the plugin's own, with your plugins loaded. Edits, shell, web, "
+                            "subagents and every tool from a plugin or an MCP server are off, since nobody is there "
+                            "to approve them. Reads still work."),
+                "argv": ["--agent", OPENCODE_READ_ONLY_AGENT],
+                "env": dict(_OPENCODE_READ_ONLY_ENV),
                 "initPermissionMode": None,
             },
             "codex": {
-                "caption": "Workspace-write sandbox. Codex can edit inside the working folder. Network stays off.",
-                "argv": ["-s", "workspace-write"],
+                "caption": ("Workspace-write sandbox, with MCP servers, apps and plugins off. Codex can edit inside "
+                            "the working folder. Network stays off."),
+                "argv": ["-s", "workspace-write"] + list(_CODEX_EXTRAS_OFF),
                 "env": {},
                 "initPermissionMode": None,
             },

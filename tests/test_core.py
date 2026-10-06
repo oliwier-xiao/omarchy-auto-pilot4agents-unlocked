@@ -124,6 +124,12 @@ V2_MESSAGES = {
     "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
                               "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
                               "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
+    "opencode_zen_tools": ("OpenCode's free Zen models answer only a run that offers every tool, and this "
+                           "permission level turns tools off. Pick another model."),
+    "claude_auto_model": ("Claude Code has Auto mode only on Sonnet and Opus 4.6 and newer, so this model "
+                          "would start without it. Pick another model."),
+    "codex_mcp_config": ("Codex runs MCP servers outside its sandbox, and your Codex settings could not be "
+                         "read to turn them off for this job. Fix ~/.codex/config.toml first."),
     "sandbox_unavailable": ("This computer's Linux kernel cannot sandbox a job (no Landlock), so Auto with the "
                             "shell on is not offered for this agent here. Pick Plan or Unattended, or Full access "
                             "on your own responsibility."),
@@ -149,6 +155,9 @@ V2_REASONS = {
     "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
     "codex_project_config": "This folder has its own Codex settings that could reach past the sandbox, so nothing ran.",
     "gemini_project_config": "This folder has Gemini CLI settings or a .env that would run code or redirect it at startup, so nothing ran.",
+    "opencode_zen_tools": "OpenCode's free Zen models need every tool on, which this permission level turns off, so nothing ran.",
+    "claude_auto_model": "Claude Code started without Auto mode, which this model, fast mode or your plan does not allow, so nothing ran.",
+    "codex_mcp_config": "Your Codex settings could not be read to turn their MCP servers off, so nothing ran.",
     "sandbox_unavailable": "This computer's kernel cannot sandbox the job, so nothing ran.",
 }
 
@@ -747,12 +756,29 @@ class DispatcherTests(Sandbox):
         self.assertEqual([lv["id"] for lv in obj["levels"]], ["plan", "unattended", "auto", "full"])
         self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
         for lv in edition.LEVELS:
-            value = lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"]
-            # Only the unlocked levels may allow a permission outright.
-            extra = {"al" + "low"} if lv["id"] in ("auto", "full") else set()
+            rules = json.loads(lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"])
             # Nothing is left to ask: a tool that asks is offered, and OpenCode does not ask before
             # every command it runs (a cd with a redirection writes unasked).
-            self.assertTrue(set(json.loads(value).values()) <= {"deny"} | extra, lv["id"])
+            if lv["id"] in ("auto", "full"):
+                # Only the unlocked levels may allow a permission outright.
+                self.assertTrue(set(rules.values()) <= {"deny", "al" + "low"}, lv["id"])
+                continue
+            # Below Auto every tool is off first, so one a plugin or an MCP server adds is never
+            # offered, and only the read-only tools come back.
+            self.assertEqual((list(rules)[0], rules["*"]), ("*", "deny"), lv["id"])
+            for key, rule in rules.items():
+                actions = set(rule.values()) if isinstance(rule, dict) else {rule}
+                self.assertLessEqual(actions, {"al" + "low", "deny"}, key)
+                if "al" + "low" in actions:
+                    self.assertIn(key, edition.OPENCODE_READ_ONLY_TOOLS)
+            self.assertEqual(rules["read"]["mcp:*"], "deny", lv["id"])
+            # The plugin's own agent runs, defined last with these same rules, so no agent that a
+            # config or a plugin sets up turns a tool back on.
+            entry = lv["harness"]["opencode"]
+            self.assertEqual(entry["argv"], ["--agent", edition.OPENCODE_READ_ONLY_AGENT], lv["id"])
+            self.assertEqual(entry["env"]["OPENCODE_CONFIG_" + "CONTENT"],
+                             '{"agent":{"%s":{"mode":"primary","permission":%s}}}'
+                             % (edition.OPENCODE_READ_ONLY_AGENT, entry["env"]["OPENCODE_PERMISSION"]), lv["id"])
         with open(os.path.join(ROOT, "manifest.json")) as handle:
             manifest = json.load(handle)
         info = obj["edition"]
@@ -2110,7 +2136,9 @@ class V2CoreTests(Sandbox):
                   "paid_blocked": "allowPaid", "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid",
                   "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness",
                   "opencode_plugin_code": "target.cwd", "codex_project_config": "target.cwd",
-                  "gemini_project_config": "target.cwd", "sandbox_unavailable": "harness"}
+                  "gemini_project_config": "target.cwd", "opencode_zen_tools": "model",
+                  "claude_auto_model": "model",
+                  "codex_mcp_config": "harness", "sandbox_unavailable": "harness"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None

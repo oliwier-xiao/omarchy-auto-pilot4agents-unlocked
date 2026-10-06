@@ -345,6 +345,55 @@ def _check_ids(job, harness, mode, sid, preview):
         raise ApError("bad_input", field="id")
 
 
+_CODEX_CONFIG_CAP = 256 * 1024
+_CODEX_SERVER_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_CODEX_SYSTEM_CONFIG = "/etc/codex/config.toml"
+
+
+def codex_mcp_servers(home):
+    """The MCP server names your Codex settings define (/etc/codex, then ~/.codex), sorted.
+
+    None when a settings file cannot be read or parsed, or names a server in a way Codex would refuse,
+    so a job that must turn each one off does not run without knowing them all.
+    """
+    import tomllib
+    names = set()
+    for path, system in ((_CODEX_SYSTEM_CONFIG, True), (os.path.join(home, ".codex", "config.toml"), False)):
+        try:
+            data = fsio.read_file_nofollow(path, _CODEX_CONFIG_CAP, owner_uid_or_root=system)
+        except ApError:
+            return None
+        if data is None:
+            continue
+        try:
+            servers = tomllib.loads(data.decode("utf-8")).get("mcp_servers", {})
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            return None
+        if not isinstance(servers, dict) or not all(_CODEX_SERVER_RE.match(name) for name in servers):
+            return None
+        names.update(servers)
+    return sorted(names)
+
+
+def codex_mcp_off(level_id, home, *, strict=True):
+    """-c mcp_servers.<name>.enabled=false for every server, at a level in edition.CODEX_MCP_OFF_LEVELS.
+
+    strict raises codex_mcp_config when the settings cannot be read; a preview shows the rest of the
+    command and leaves that to the gate.
+    """
+    if level_id not in edition.CODEX_MCP_OFF_LEVELS:
+        return []
+    names = codex_mcp_servers(home)
+    if names is None:
+        if strict:
+            raise ApError("codex_mcp_config", field="harness")
+        return []
+    out = []
+    for name in names:
+        out += ["-c", "mcp_servers.%s.enabled=false" % name]
+    return out
+
+
 def _build(job, exec_prefix, run_dir, gen_text, preview=False):
     harness = job["harness"]
     if harness not in consts.HARNESSES:
@@ -410,6 +459,7 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
         argv += ["--ignore-rules"]
         slot = [len(argv), len(argv) + len(level_argv)]
         argv += level_argv
+        argv += codex_mcp_off(job["level"], fsio.home(), strict=not preview)
         argv += ["--json", "--color", "never", "-o", run_dir + "/" + job["id"] + "-g" + gen_text + ".last.txt"]
         if target.get("allowNonGit") is True:
             argv += ["--skip-git-repo-check"]

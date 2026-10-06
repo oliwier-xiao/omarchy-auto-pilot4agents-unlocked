@@ -85,6 +85,12 @@ MESSAGES = {
     "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
                               "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
                               "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
+    "opencode_zen_tools": ("OpenCode's free Zen models answer only a run that offers every tool, and this "
+                           "permission level turns tools off. Pick another model."),
+    "claude_auto_model": ("Claude Code has Auto mode only on Sonnet and Opus 4.6 and newer, so this model "
+                          "would start without it. Pick another model."),
+    "codex_mcp_config": ("Codex runs MCP servers outside its sandbox, and your Codex settings could not be "
+                         "read to turn them off for this job. Fix ~/.codex/config.toml first."),
     "sandbox_unavailable": ("This computer's Linux kernel cannot sandbox a job (no Landlock), so Auto with the "
                             "shell on is not offered for this agent here. Pick Plan or Unattended, or Full access "
                             "on your own responsibility."),
