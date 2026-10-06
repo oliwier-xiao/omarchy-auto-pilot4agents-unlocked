@@ -549,10 +549,18 @@ def sandbox_spec(harness, level_id, cwd, env, exec_prefix, run_dir):
     cache = _xdg_dir(env, "XDG_CACHE_HOME", ".cache", home)
     if harness == "opencode":
         app = os.path.join(data, "opencode")
-        rw.append(app)
-        ro += [os.path.join(config, "opencode"), os.path.join(cache, "opencode"), os.path.join(state, "opencode")]
-        predirs += [app, os.path.join(state, "opencode"), os.path.join(cache, "opencode", "bin"),
-                    os.path.join(sbx, "opencode")]
+        locks = os.path.join(state, "opencode", "locks")
+        claude_compat = os.path.join(sbx, "claude")
+        # OpenCode's config, cache (which holds the plugins' own code) and state stay read-only; only
+        # the lock files it makes under state are written. oh-my-openagent reads its settings from
+        # ~/.omo and keeps Claude Code transcripts under CLAUDE_CONFIG_DIR, pointed here at the run's
+        # private folder so ~/.claude, and the Claude sign-in in it, stay closed.
+        rw += [app, locks]
+        ro += [os.path.join(config, "opencode"), os.path.join(cache, "opencode"), os.path.join(state, "opencode"),
+               os.path.join(home, ".omo")]
+        predirs += [app, os.path.join(state, "opencode"), locks, os.path.join(cache, "opencode", "bin"),
+                    os.path.join(sbx, "opencode"), claude_compat]
+        extra_env["CLAUDE_CONFIG_DIR"] = claude_compat
     elif harness == "gemini":
         # SANDBOX=sandbox-exec keeps all of Gemini CLI's runtime state under the cache, so ~/.gemini
         # (settings, policies, extensions, the sign-in) stays read-only. A sign-in refresh cannot be

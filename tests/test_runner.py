@@ -2831,6 +2831,19 @@ class SandboxSpecTests(unittest.TestCase):
         home = os.path.realpath(fsio.home())
         self.assertIn(os.path.join(home, ".config", "opencode"), spec["ro"])  # own config read-only
         self.assertIn(os.path.join(home, ".local", "share", "opencode"), spec["rw"])  # data writable
+        # Plugin code under the cache, and the rest of state, stay read-only; only state's locks are written.
+        self.assertIn(os.path.join(home, ".cache", "opencode"), spec["ro"])
+        self.assertIn(os.path.join(home, ".local", "state", "opencode", "locks"), spec["rw"])
+        self.assertNotIn(os.path.join(home, ".local", "state", "opencode"), spec["rw"])
+        # oh-my-openagent: its settings read-only, its Claude transcripts in the run's private folder,
+        # so nothing under ~/.claude (the Claude sign-in included) is granted.
+        self.assertIn(os.path.join(home, ".omo"), spec["ro"])
+        self.assertEqual(cmd["env"]["CLAUDE_CONFIG_DIR"], "/s/runs/sbx/claude")
+        self.assertIn("/s/runs/sbx/claude", spec["preDirs"])
+        claude_dir = os.path.join(home, ".claude")
+        granted = spec["rw"] + spec["ro"] + spec["mkdir"] + spec["rwFiles"]
+        self.assertFalse(any(p == claude_dir or p.startswith(claude_dir + "/") for p in granted))
+        self.assertTrue(all(not p.startswith(os.path.join(home, ".omo")) for p in spec["rw"] + spec["mkdir"]))
         # The working folder is in the confinement spec only, never on the command line or env.
         self.assertNotIn(work, cmd["argv"])
         self.assertTrue(all(work not in str(v) for v in cmd["env"].values()))
