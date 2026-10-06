@@ -455,7 +455,7 @@ def check_denylist_generated_argv():
             permission = entry["env"].get("OPENCODE_PERMISSION")
             if permission is not None:
                 rules = json.loads(permission)
-                allowed = ("deny", "ask") + (("al" + "low",) if unlocked else ())
+                allowed = ("deny",) + (("al" + "low",) if unlocked else ())
                 if any(v not in allowed for v in rules.values()):
                     problems.append("edition.LEVELS %s/%s: OPENCODE_PERMISSION holds a value other than %s"
                                     % (level["id"], harness, "/".join(allowed)))

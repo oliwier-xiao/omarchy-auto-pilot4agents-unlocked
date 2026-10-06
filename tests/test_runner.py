@@ -471,9 +471,9 @@ class HarnessTests(Sandbox):
                     values = set(json.loads(cmd["env"]["OPENCODE_PERMISSION"]).values())
                     # Only the unlocked levels may allow anything outright.
                     if level["id"] in ("auto", "full"):
-                        self.assertTrue(values <= {"deny", "ask", "al" + "low"}, values)
+                        self.assertTrue(values <= {"deny", "al" + "low"}, values)
                     else:
-                        self.assertTrue(values <= {"deny", "ask"}, values)
+                        self.assertTrue(values <= {"deny"}, values)
         self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
 
     def test_agent_env_allowlist(self):

@@ -43,7 +43,9 @@ _OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"d
 # offered and checked call by call, which OpenCode does not do for every command.
 _OPENCODE_UNATTENDED = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
                         '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
-_OPENCODE_AUTO = ('{"edit":"allow","bash":"ask","webfetch":"allow","websearch":"allow",'
+# Auto turns shell off for the same reason: left to ask, a command headed by cd with a redirection
+# is never asked about and writes wherever it points, outside the working folder included.
+_OPENCODE_AUTO = ('{"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"deny","doom_loop":"deny"}')
 _OPENCODE_FULL = ('{"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"allow","doom_loop":"allow"}')
@@ -156,7 +158,7 @@ LEVELS = (
                 "initPermissionMode": "auto",
             },
             "opencode": {
-                "caption": "Edits, web and subagents run. Shell commands would ask, so they are rejected.",
+                "caption": "Edits, web and subagents run. Shell commands are off, since nobody is there to approve them.",
                 "argv": [],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_AUTO},
                 "initPermissionMode": None,

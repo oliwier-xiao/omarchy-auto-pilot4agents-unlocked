@@ -115,8 +115,9 @@ V2_MESSAGES = {
                          "Trust this workspace."),
     "gemini_policy": ("Gemini CLI would not apply the policy that keeps a job in its approval mode: "
                       "/etc/gemini-cli/policies has policies of its own, or the plugin's policy file failed a check."),
-    "opencode_plugin_code": ("This folder, or a folder above it in the same repository, has OpenCode plugin code "
-                             "in .opencode/plugin. OpenCode runs it at startup, so no job runs here. Pick another folder."),
+    "opencode_plugin_code": ("This folder, or a folder above it, has OpenCode plugin code: a .opencode/plugin "
+                             "folder, or a plugin listed in an opencode.json. OpenCode runs it at startup, so no job "
+                             "runs here. Keep your own plugins in ~/.config/opencode, or pick another folder."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -737,7 +738,9 @@ class DispatcherTests(Sandbox):
             value = lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"]
             # Only the unlocked levels may allow a permission outright.
             extra = {"al" + "low"} if lv["id"] in ("auto", "full") else set()
-            self.assertTrue(set(json.loads(value).values()) <= {"deny", "ask"} | extra, lv["id"])
+            # Nothing is left to ask: a tool that asks is offered, and OpenCode does not ask before
+            # every command it runs (a cd with a redirection writes unasked).
+            self.assertTrue(set(json.loads(value).values()) <= {"deny"} | extra, lv["id"])
         with open(os.path.join(ROOT, "manifest.json")) as handle:
             manifest = json.load(handle)
         info = obj["edition"]

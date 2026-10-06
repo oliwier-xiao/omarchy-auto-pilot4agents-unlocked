@@ -336,7 +336,8 @@ class OpenCodeTests(PaidCase):
         # OpenCode imports .opencode/plugin/*.ts at startup, before any permission; so a working
         # folder whose tree up to its git root carries such code runs it with nobody watching.
         self.patch(fsio, "_check_ancestors", lambda parent, owners: None)
-        self.assertIsNone(paid.opencode_preflight(self.work))
+        refused = lambda cwd: paid.opencode_preflight(cwd, self.home) == "opencode_plugin_code"  # noqa: E731
+        self.assertIsNone(paid.opencode_preflight(self.work, self.home))
         self.assertIsNone(self.gate(self.job("opencode"))["code"])
         for rel, hit in ((".opencode/plugin/evil.ts", True), (".opencode/plugins/x.js", True),
                          (".opencode/plugin/README.md", False), (".opencode/tool/t.ts", False),
@@ -344,16 +345,47 @@ class OpenCodeTests(PaidCase):
             path = os.path.join(self.work, rel)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             open(path, "w").close()
-            self.assertEqual(paid.opencode_preflight(self.work) == "opencode_plugin_code", hit, rel)
+            self.assertEqual(refused(self.work), hit, rel)
             os.remove(path)
-        os.makedirs(os.path.join(self.work, ".git"), exist_ok=True)
+        # A plugin listed in an opencode.json, at the top or under .opencode, is imported at startup
+        # too (v1 "plugin" and v2 "plugins"; a file, a file:// URL or an npm package).
+        for rel, body, hit in (("opencode.json", '{"plugin": ["./evil.js"]}', True),
+                               ("opencode.json", '{"plugins": ["some-npm-plugin"]}', True),
+                               ("opencode.jsonc", '{\n  // mine\n  "plugin": ["x",],\n}', True),
+                               (".opencode/opencode.json", '{"plugin": [["pkg", {}]]}', True),
+                               (".opencode/opencode.jsonc", '{"\\u0070lugin": ["x"]}', True),
+                               ("opencode.json", '{"plugin": [], "plugins": []}', False),
+                               ("opencode.json", '{"agent": {"plan": {"permission": {"edit": "al' + 'low"}}}}', False),
+                               ("opencode.json", "   \n", False),
+                               ("opencode.json", '{"plugin": ["x"]', True)):
+            path = os.path.join(self.work, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                handle.write(body)
+            self.assertEqual(refused(self.work), hit, (rel, body))
+            os.remove(path)
+
+        # Found in any folder above, up to the repository root and outside a repository up to /,
+        # which is how far OpenCode looks; a stray .git folder does not end the walk early.
         deep = self.mkdir("proj/a/b")
         os.makedirs(os.path.join(self.work, ".opencode", "plugin"), exist_ok=True)
         open(os.path.join(self.work, ".opencode", "plugin", "p.ts"), "w").close()
-        self.assertEqual(paid.opencode_preflight(deep), "opencode_plugin_code")
+        self.assertTrue(refused(deep))
+        os.makedirs(os.path.join(self.work, "a", ".git"), exist_ok=True)
+        self.assertTrue(refused(deep))
         g = self.gate(self.job("opencode", target={"mode": "new", "cwd": deep, "sessionId": None,
                                                     "sessionPath": None}))
         self.assertEqual(g["code"], "opencode_plugin_code")
+        shutil.rmtree(os.path.join(self.work, ".opencode"))
+        self.write("proj/opencode.json", '{"plugin": ["./p.js"]}')
+        self.assertTrue(refused(deep))
+        os.remove(self.path("proj/opencode.json"))
+        self.assertIsNone(paid.opencode_preflight(deep, self.home))
+
+        # The home folder's own opencode.json and .opencode are the user's, like ~/.config/opencode.
+        self.write("opencode.json", '{"plugin": ["oh-my-opencode"]}')
+        self.write(".opencode/plugin/mine.ts", "")
+        self.assertIsNone(paid.opencode_preflight(deep, self.home))
 
     def test_opencode_verbose_parser_7_free_fixture(self):
         text = S.verbose_text(S.seven_free_blocks())

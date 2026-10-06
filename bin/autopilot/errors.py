@@ -76,8 +76,9 @@ MESSAGES = {
                       "a check."),
     "cursor_untrusted": ("Cursor does not trust this folder yet. Open cursor-agent in this folder once and choose "
                          "Trust this workspace."),
-    "opencode_plugin_code": ("This folder, or a folder above it in the same repository, has OpenCode plugin code "
-                             "in .opencode/plugin. OpenCode runs it at startup, so no job runs here. Pick another folder."),
+    "opencode_plugin_code": ("This folder, or a folder above it, has OpenCode plugin code: a .opencode/plugin "
+                             "folder, or a plugin listed in an opencode.json. OpenCode runs it at startup, so no job "
+                             "runs here. Keep your own plugins in ~/.config/opencode, or pick another folder."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

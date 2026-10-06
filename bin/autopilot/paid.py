@@ -586,20 +586,56 @@ def opencode_project_config(cwd):
     return False
 
 
-def opencode_preflight(cwd):
+def _walk_to_fs_root(path):
+    """Folders from path up to the filesystem root, path first."""
+    current, dirs = path, []
+    while True:
+        dirs.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            return dirs
+        current = parent
+
+
+def _opencode_config_loads_plugins(path):
+    """True when an OpenCode config file would make OpenCode import plugin code, or cannot be read.
+
+    OpenCode skips an empty file and one it cannot parse; this refuses the second too, since what
+    it would load cannot be known here.
+    """
+    try:
+        data = fsio.read_file_nofollow(path, _CONFIG_CAP, owner_uid_or_root=True)
+    except ApError:
+        return True
+    if data is None or not data.strip():
+        return False
+    obj = _jsonc_object(data)
+    return obj is None or any(obj.get(key) for key in ("plugin", "plugins"))
+
+
+def opencode_preflight(cwd, home):
     """First OpenCode refusal for a working folder, or None.
 
-    OpenCode imports and runs every `.ts`/`.js` under a folder's `.opencode/plugin` or
-    `.opencode/plugins` the moment it starts, before any permission or level applies, and
-    OPENCODE_DISABLE_PROJECT_CONFIG does not stop it. So a folder whose tree, up to its repository
-    root, carries such plugin code is refused: an unattended run there would run that code. Config
-    that only redefines agents, permissions, MCP servers or tools is neutralised by the env flag,
-    not refused here. Stat and one scandir per folder; nothing is read or parsed.
+    OpenCode imports and runs plugin code the moment it starts, before any permission or level
+    applies, and neither OPENCODE_DISABLE_PROJECT_CONFIG nor --pure stops it: every `.ts`/`.js`
+    under a `.opencode/plugin` or `.opencode/plugins` folder, and every entry under "plugin" or
+    "plugins" in an opencode.json or opencode.jsonc (a file, or an npm package it installs), found
+    in the working folder or any folder above it up to the repository root, or up to / outside a
+    repository. So a folder with any of these above it is refused: an unattended run there would
+    run that code. The home folder's own files are the user's and are skipped. Config that only
+    redefines agents, permissions, providers, MCP servers or tools is neutralised by the env flag,
+    not refused here.
     """
     path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
-    if path is None:
+    home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
+    if path is None or home_path is None:
         return "opencode_plugin_code"
-    for folder in _walk_to_git_root(os.path.realpath(path)):
+    home_real = os.path.realpath(home_path)
+    # Walked to / even inside a repository: a stray .git folder that git itself does not take for
+    # a repository must not end the walk early.
+    for folder in _walk_to_fs_root(os.path.realpath(path)):
+        if folder == home_real:
+            continue
         for name in ("plugin", "plugins"):
             plugin_dir = os.path.join(folder, ".opencode", name)
             try:
@@ -608,6 +644,10 @@ def opencode_preflight(cwd):
                         return "opencode_plugin_code"
             except OSError:
                 continue
+        for config_dir in (folder, os.path.join(folder, ".opencode")):
+            for name in ("opencode.json", "opencode.jsonc"):
+                if _opencode_config_loads_plugins(os.path.join(config_dir, name)):
+                    return "opencode_plugin_code"
     return None
 
 
@@ -1045,9 +1085,9 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     if code is None and harness_id == "gemini" and harness.gemini_policy_wanted(job.get("level")):
         code = gemini_policy_gate()
 
-    # 2c. OpenCode: a working folder whose tree carries plugin code runs it at start, before any level
+    # 2c. OpenCode: plugin code in or above the working folder runs at start, before any level
     if code is None and harness_id == "opencode":
-        code = opencode_preflight(cwd)
+        code = opencode_preflight(cwd, home)
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None
