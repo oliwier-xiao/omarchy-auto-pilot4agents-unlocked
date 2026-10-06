@@ -49,6 +49,7 @@ REASON_FOR_CODE = {
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
     "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
     "opencode_zen_tools": "opencode_zen_tools", "claude_auto_model": "claude_auto_model",
+    "codex_mcp_config": "codex_mcp_config",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -1267,6 +1268,11 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2d. Codex: a folder's own .codex/config.toml loads once Codex trusts the folder, past any level
     if code is None and harness_id == "codex":
         code = codex_preflight(cwd, home)
+
+    # 2d'. Codex: below Auto every MCP server in your Codex settings is turned off by name, so they must be known
+    if code is None and harness_id == "codex" and job.get("level") in edition.CODEX_MCP_OFF_LEVELS \
+            and harness.codex_mcp_servers(home) is None:
+        code = "codex_mcp_config"
 
     # 2e. Claude Code: Auto mode is offered on some models only, and another one starts in default mode
     if code is None and harness_id == "claude" and claude_auto_level(job.get("level")) \

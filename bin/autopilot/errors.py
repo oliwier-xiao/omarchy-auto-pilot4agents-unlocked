@@ -89,6 +89,8 @@ MESSAGES = {
                            "permission level turns tools off. Pick another model."),
     "claude_auto_model": ("Claude Code has Auto mode only on Sonnet and Opus 4.6 and newer, so this model "
                           "would start without it. Pick another model."),
+    "codex_mcp_config": ("Codex runs MCP servers outside its sandbox, and your Codex settings could not be "
+                         "read to turn them off for this job. Fix ~/.codex/config.toml first."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

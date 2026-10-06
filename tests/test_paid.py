@@ -274,6 +274,21 @@ class ClaudeCodexGeminiTests(PaidCase):
         self.assertIsNone(self.gate(self.job("claude", level="auto", model="sonnet"))["code"])
         self.assertEqual(paid.REASON_FOR_CODE["claude_auto_model"], "claude_auto_model")
 
+    def test_codex_refused_below_auto_when_its_mcp_servers_cannot_be_known(self):
+        # Each MCP server in the Codex settings is turned off by name below Auto, so unreadable settings stop the job.
+        self.patch(harness, "_CODEX_SYSTEM_CONFIG", os.path.join(self.tmp, "etc-codex-config.toml"))
+        self.write(".codex/config.toml", "[mcp_servers\n")
+        for level in [lv["id"] for lv in edition.LEVELS if "codex" in lv["harness"]]:
+            for phase in ("preview", "arm", "prefire"):
+                code = self.gate(self.job("codex", level=level), phase=phase)["code"]
+                if level in edition.CODEX_MCP_OFF_LEVELS:
+                    self.assertEqual(code, "codex_mcp_config", (level, phase))
+                else:
+                    self.assertNotEqual(code, "codex_mcp_config", (level, phase))
+        self.write(".codex/config.toml", '[mcp_servers.context7]\ncommand = "npx"\n')
+        self.assertNotEqual(self.gate(self.job("codex"), phase="preview")["code"], "codex_mcp_config")
+        self.assertEqual(paid.REASON_FOR_CODE["codex_mcp_config"], "codex_mcp_config")
+
     def test_codex_login_lines_table(self):
         table = {
             "Logged in using ChatGPT": "chatgpt",
