@@ -149,7 +149,7 @@ LEVELS = (
                 "initPermissionMode": None,
             },
             "gemini": {
-                "caption": "Default approval. Tools that would ask are denied because nobody is there to answer.",
+                "caption": "Only Gemini's own read, search and look-up tools run. Edits, shell and anything a settings file adds are denied.",
                 "argv": ["--approval-mode", "default"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,
@@ -188,7 +188,7 @@ LEVELS = (
                 "initPermissionMode": None,
             },
             "gemini": {
-                "caption": "Auto edit. File edits are approved. Shell commands would ask, so they are denied.",
+                "caption": "Auto edit. File edits and web fetch are approved. Shell, and edits to Gemini's own settings or a .env file, are denied.",
                 "argv": ["--approval-mode", "auto_edit"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,

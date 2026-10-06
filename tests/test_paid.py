@@ -82,13 +82,80 @@ class GeminiPolicyTests(PaidCase):
             data = handle.read()
         self.assertEqual(data, harness.GEMINI_POLICY_TEXT.encode("utf-8"))
         rules = tomllib.loads(data.decode("utf-8"))["rule"]
-        self.assertEqual(len(rules), 1)
         rule = rules[0]
         self.assertEqual((rule["toolName"], rule["decision"], rule["priority"]),
                          (["enter_plan_mode", "exit_plan_mode"], "deny", 999))
         # No modes and no interactive key: the rule holds in every approval mode, headless or not.
         self.assertEqual(sorted(rule), ["decision", "denyMessage", "priority", "toolName"])
+        # Plan and Default each deny every tool, then let their own list through, whatever a settings
+        # file, tools.allowed or a user policy allows on top.
+        for mode, kept in (("plan", {"read_file", "list_directory", "glob", "grep_search", "update_topic"}),
+                           ("default", {"read_file", "list_directory", "glob", "grep_search", "update_topic",
+                                        "google_web_search", "get_internal_docs", "complete_task", "invoke_agent"}),
+                           ("autoEdit", {"read_file", "list_directory", "glob", "grep_search", "update_topic",
+                                         "google_web_search", "get_internal_docs", "complete_task", "invoke_agent",
+                                         "write_file", "replace", "web_fetch"})):
+            mine = [r for r in rules if mode in r.get("modes", [])]
+            floor = [r for r in mine if r["toolName"] == "*"]
+            self.assertEqual([(r["decision"], r["priority"]) for r in floor], [("deny", 500)], mode)
+            allowed = set()
+            for r in mine:
+                if r["toolName"] != "*" and r["decision"] != "deny":
+                    self.assertGreater(r["priority"], 500)
+                    allowed |= {r["toolName"]} if isinstance(r["toolName"], str) else set(r["toolName"])
+            self.assertEqual(allowed, kept, mode)
+        # Auto: no shell, and no edit to Gemini CLI's own settings or a .env file, above the allow list.
+        auto_denies = [r for r in rules if "autoEdit" in r.get("modes", []) and r["decision"] == "deny"
+                       and r["toolName"] != "*"]
+        self.assertEqual(sorted((str(r["toolName"]), r["priority"]) for r in auto_denies),
+                         [("['write_file', 'replace']", 700), ("['write_file', 'replace']", 700),
+                          ("run_shell_command", 700)])
+        agents = [r for r in rules if r["toolName"] == "invoke_agent"]
+        self.assertTrue(agents and all("codebase_investigator|cli_help|generalist" in r["argsPattern"] for r in agents))
         self.assertIsNone(paid.gemini_policy_gate())
+
+    def test_a_folder_whose_gemini_settings_or_env_reach_past_the_policy_is_refused(self):
+        refused = lambda cwd: paid.gemini_preflight(cwd, self.home) == "gemini_project_config"  # noqa: E731
+        deep = self.mkdir("proj/a/b")
+        self.assertIsNone(paid.gemini_preflight(deep, self.home))
+        settings = "proj/a/b/.gemini/settings.json"
+        for body, hit in (({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "x"}]}]}}, True),
+                          ({"tools": {"discoveryCommand": "x"}}, True), ({"tools": {"callCommand": "x"}}, True),
+                          ({"tools": {"sandbox": "docker"}}, True), ({"mcpServers": {"x": {"command": "y"}}}, True),
+                          ({"mcp": {"serverCommand": "x"}}, True), ({"telemetry": {"enabled": True}}, True),
+                          ({"agents": {"overrides": {}}}, True), ({"context": {"includeDirectories": ["/"]}}, True),
+                          ({"security": {"auth": {"selectedType": "oauth-personal"}}}, False),
+                          ("{broken", True), ({"tools": {"allowed": ["run_shell_command"]}}, False),
+                          ({"ui": {"theme": "x"}, "hooks": {}, "context": {"fileName": "AGENTS.md"}}, False),
+                          ("// mine\n{}", False), ("", False)):
+            self.write(settings, body)
+            self.assertEqual(refused(deep), hit, body)
+        os.remove(self.path(settings))
+        # Gemini CLI loads the first .env from the folder up to / (.gemini/.env first) into its own
+        # environment; the home folder's own ends the search.
+        for rel, body, hit in (("proj/a/b/.env", "GOOGLE_GEMINI_BASE_URL=http://x\n", True),
+                               ("proj/.env", "export GEMINI_API_KEY=k\n", True),
+                               ("proj/a/.gemini/.env", "https_proxy=http://x\n", True),
+                               ("proj/.env", "NODE_OPTIONS=--require ./x.js\n", True),
+                               ("proj/.env", "GEMINI_CLI_SYSTEM_SETTINGS_PATH: ./s.json\n", True),
+                               ("proj/.env", "NODE_ENV=production\nPORT=3000\nDATABASE_URL=x # GOOGLE_X\n", False),
+                               (".env", "GEMINI_API_KEY=mine\n", False)):
+            self.write(rel, body)
+            self.assertEqual(refused(deep), hit, (rel, body))
+            os.remove(self.path(rel))
+        # The nearest one is the one Gemini CLI reads: a benign one below, or a .env folder (a Python
+        # virtual environment), ends the search before a risky one above.
+        self.write("proj/.env", "GOOGLE_API_KEY=k\n")
+        self.assertTrue(refused(deep))
+        self.write("proj/a/.env", "PORT=1\n")
+        self.assertIsNone(paid.gemini_preflight(deep, self.home))
+        os.remove(self.path("proj/a/.env"))
+        os.makedirs(self.path("proj/a/b/.env/bin"))
+        self.assertIsNone(paid.gemini_preflight(deep, self.home))
+        shutil.rmtree(self.path("proj/a/b/.env"))
+        g = self.gate(self.job("gemini", allowPaid=True, target={"mode": "new", "cwd": deep, "sessionId": None,
+                                                                  "sessionPath": None}))
+        self.assertEqual((g["ok"], g["code"]), (False, "gemini_project_config"))
 
     def test_a_gemini_job_is_refused_when_gemini_would_set_the_policy_aside(self):
         gemini = self.job("gemini", allowPaid=True)

@@ -952,6 +952,11 @@ class ClassifyTests(unittest.TestCase):
                    run_result(rc=0), "done")
         self.check("opencode", [{"type": "step_start", "sessionID": "ses_abcdefgh1234"}], run_result(rc=0), "done")
         self.check("gemini", [], run_result(rc=0, stdout=b'{\n "response": "OK"\n}'), "done")
+        # Gemini CLI runs on without an admin policy it could not load, so that run was not held to its level.
+        result = self.check("gemini", [], run_result(rc=0, stdout=b'{\n "response": "OK"\n}',
+                                                     stderr=b"[ADMIN] Policy file error in gemini-policy.toml"),
+                            "boundary_mismatch")
+        self.assertEqual(result["detail"], "policy_error")
         # exit code alone never decides, in either direction
         result = self.check("claude", [self.init()], run_result(rc=0), "failed")
         self.assertEqual(result["detail"], "unclassified")
@@ -2634,7 +2639,7 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
-                 "codex_project_config": "codex_project_config"}
+                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")

@@ -121,6 +121,9 @@ V2_MESSAGES = {
     "codex_project_config": ("This folder, or a folder above it, has its own Codex settings in .codex/config.toml. "
                              "Codex would load them, and they can start programs outside its sandbox, so no job runs "
                              "here. Pick another folder."),
+    "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
+                              "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
+                              "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -142,6 +145,7 @@ V2_REASONS = {
     "gemini_policy": "Gemini CLI would not apply the policy that keeps the job in its approval mode, so nothing ran.",
     "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
     "codex_project_config": "This folder has its own Codex settings that could reach past the sandbox, so nothing ran.",
+    "gemini_project_config": "This folder has Gemini CLI settings or a .env that would run code or redirect it at startup, so nothing ran.",
 }
 
 
@@ -2101,7 +2105,8 @@ class V2CoreTests(Sandbox):
                   "cursor_untrusted": "target.cwd", "not_logged_in": "harness", "pi_auth_invalid": "provider",
                   "paid_blocked": "allowPaid", "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid",
                   "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness",
-                  "opencode_plugin_code": "target.cwd", "codex_project_config": "target.cwd"}
+                  "opencode_plugin_code": "target.cwd", "codex_project_config": "target.cwd",
+                  "gemini_project_config": "target.cwd"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None

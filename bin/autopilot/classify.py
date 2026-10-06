@@ -852,6 +852,9 @@ def _classify(state, run, level_id, now):
         return _outcome("limit", "overage_blocked", state, limit, reason="overage_blocked")
     if killed == "boundary":
         return _outcome("boundary_mismatch", state.get("killDetail") or "init_mode", state)
+    # Gemini CLI goes on without an admin policy it could not load, so such a run was not held to its level.
+    if state["harness"] == "gemini" and "[ADMIN] Policy file error" in _stderr_text(run):
+        return _outcome("boundary_mismatch", "policy_error", state)
     if state["harness"] in ("opencode", "cursor") and level_id == "plan" and state["toolViolations"] > 0:
         return _outcome("boundary_mismatch", "tool_violation", state)
     success = _success(state, run)
