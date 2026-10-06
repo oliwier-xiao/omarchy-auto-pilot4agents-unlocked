@@ -87,6 +87,8 @@ MESSAGES = {
                               "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
     "opencode_zen_tools": ("OpenCode's free Zen models answer only a run that offers every tool, and this "
                            "permission level turns tools off. Pick another model."),
+    "claude_auto_model": ("Claude Code has Auto mode only on Sonnet and Opus 4.6 and newer, so this model "
+                          "would start without it. Pick another model."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

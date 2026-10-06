@@ -245,6 +245,35 @@ class ClaudeCodexGeminiTests(PaidCase):
             self.assertIsNone(paid.claude_rate_event_verdict(info, False), info)
         self.assertIsNone(paid.claude_rate_event_verdict({"isUsingOverage": True}, True))
 
+    def test_claude_auto_needs_a_model_with_auto_mode(self):
+        # Claude Code 2.1.289 starts an older model in default mode, which the runner would stop at once.
+        ok = paid.claude_auto_model_ok
+        for model in ("haiku", "haiku[1m]", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5",
+                      "claude-opus-4-5", "claude-opus-4-1", "claude-sonnet-4-20250514", "claude-3-7-sonnet-latest",
+                      "claude-3-5-haiku-20241022"):
+            self.assertFalse(ok(model, {}), model)
+        for model in ("opus", "sonnet", "fable", "opus[1m]", "claude-opus-4-6", "claude-sonnet-4-6",
+                      "claude-opus-4-8", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-5", "best", None, ""):
+            self.assertTrue(ok(model, {}), model)
+        # The settings model counts when the job names none, and an alias goes through its pin.
+        self.assertFalse(ok(None, {"model": "haiku"}))
+        self.assertTrue(ok("opus", {"model": "haiku"}))
+        self.assertFalse(ok("sonnet", {"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-5"}}))
+        self.assertTrue(ok("haiku", {"env": {"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4-6[1m]"}}))
+        self.assertTrue(ok("opus", {"env": []}))
+
+        auto = [lv["id"] for lv in edition.LEVELS if paid.claude_auto_level(lv["id"])]
+        self.assertEqual(auto, ["auto"])
+        for level in [lv["id"] for lv in edition.LEVELS if "claude" in lv["harness"]]:
+            for phase in ("preview", "arm", "prefire"):
+                got = self.gate(self.job("claude", level=level, model="haiku"), phase=phase)["code"]
+                self.assertEqual(got, "claude_auto_model" if level in auto else None, (level, phase))
+                self.assertIsNone(self.gate(self.job("claude", level=level, model="opus"), phase=phase)["code"])
+        self.write(".claude/settings.json", json.dumps({"model": "claude-haiku-4-5"}))
+        self.assertEqual(self.gate(self.job("claude", level="auto"))["code"], "claude_auto_model")
+        self.assertIsNone(self.gate(self.job("claude", level="auto", model="sonnet"))["code"])
+        self.assertEqual(paid.REASON_FOR_CODE["claude_auto_model"], "claude_auto_model")
+
     def test_codex_login_lines_table(self):
         table = {
             "Logged in using ChatGPT": "chatgpt",

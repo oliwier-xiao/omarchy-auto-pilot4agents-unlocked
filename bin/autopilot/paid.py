@@ -48,7 +48,7 @@ REASON_FOR_CODE = {
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
     "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
-    "opencode_zen_tools": "opencode_zen_tools",
+    "opencode_zen_tools": "opencode_zen_tools", "claude_auto_model": "claude_auto_model",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -655,6 +655,54 @@ def opencode_hides_tools(level_id):
     return any(rules.get(key) == "deny" for key in _OPENCODE_TOOL_PERMISSIONS)
 
 
+# Claude Code (2.1.289) offers Auto mode on Sonnet and Opus 4.6 and newer: it refuses the versions it lists
+# before claude-opus-4-6 and every Claude 3, and allows a name it does not list. On such a model it starts
+# in default mode instead, and the runner stops the job at its first line, so the gate refuses it first.
+_CLAUDE_FAMILIES = ("fable", "opus", "sonnet", "haiku")
+_CLAUDE_VERSION_RE = re.compile(r"^claude-(?:fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$")
+_CLAUDE_AUTO_FROM = (4, 6)
+_WIDE = "[1m]"
+
+
+def claude_settings(home):
+    """~/.claude/settings.json as an object, or {} (the only settings a job loads: --setting-sources user)."""
+    obj, _refused = _read_config(os.path.join(home, ".claude", "settings.json"), _CONFIG_CAP)
+    return obj or {}
+
+
+def claude_auto_model_ok(model, settings):
+    """False when Claude Code would start this model without Auto mode.
+
+    The job's model, else the settings `model`; a family alias is read through its
+    ANTHROPIC_DEFAULT_<FAMILY>_MODEL pin in the settings env. No Haiku has Auto mode so far, so the
+    bare haiku alias is refused. A name this cannot read is left to Claude Code (and the runner).
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    value = model if isinstance(model, str) and model else settings.get("model")
+    if not isinstance(value, str) or not value:
+        return True
+    value = value[:-len(_WIDE)] if value.endswith(_WIDE) else value
+    if value in _CLAUDE_FAMILIES:
+        env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+        pin = env.get("ANTHROPIC_DEFAULT_%s_MODEL" % value.upper())
+        if not isinstance(pin, str) or not pin:
+            return value != "haiku"
+        value = pin[:-len(_WIDE)] if pin.endswith(_WIDE) else pin
+    if value.startswith("claude-3-"):
+        return False
+    match = _CLAUDE_VERSION_RE.match(value)
+    if match is None:
+        return True
+    return (int(match.group(1)), int(match.group(2) or 0)) >= _CLAUDE_AUTO_FROM
+
+
+def claude_auto_level(level_id):
+    """True when the level starts Claude in Auto mode."""
+    level = edition.level(level_id) if isinstance(level_id, str) else None
+    entry = (level or {}).get("harness", {}).get("claude")
+    return bool(entry) and entry.get("initPermissionMode") == "auto"
+
+
 def opencode_default_model(home):
     """The `model` of the global OpenCode config (config.json, opencode.json, opencode.jsonc; later wins)."""
     model = None
@@ -1219,6 +1267,11 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2d. Codex: a folder's own .codex/config.toml loads once Codex trusts the folder, past any level
     if code is None and harness_id == "codex":
         code = codex_preflight(cwd, home)
+
+    # 2e. Claude Code: Auto mode is offered on some models only, and another one starts in default mode
+    if code is None and harness_id == "claude" and claude_auto_level(job.get("level")) \
+            and not claude_auto_model_ok(job.get("model"), claude_settings(home)):
+        code = "claude_auto_model"
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None

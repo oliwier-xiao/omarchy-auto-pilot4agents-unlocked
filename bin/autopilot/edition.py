@@ -54,21 +54,30 @@ _GEMINI_ISOLATION = ("--extensions", _GEMINI_NONE, "--allowed-mcp-server-names",
 
 # OpenCode checks a permission inside each of its own tools, so a tool that a plugin or an MCP server
 # adds, or a plugin's own tool of the same name (oh-my-openagent replaces task and adds a tmux shell),
-# is never asked about: it runs whatever edit and bash say. These rules come after OpenCode's own, so
-# "*" first turns every tool off, and a tool that is off is never offered to the model. Only the
-# read-only tools named next are back on; .env files stay unread as OpenCode has them by default.
-# Nothing is left to ask: nobody is there to answer, and a tool that asks is still offered.
+# is never asked about: it runs whatever edit and bash say. So "*" first turns every tool off, and a
+# tool that is off is never offered to the model. Only the read-only tools named next are back on;
+# .env files stay unread as OpenCode has them by default, and so do MCP servers' resources, which
+# OpenCode reads under the read permission as mcp:<server>:*. Nothing is left to ask: nobody is there
+# to answer, and a tool that asks is still offered.
 OPENCODE_READ_ONLY_TOOLS = ("read", "glob", "grep", "list", "todowrite", "skill")
 _OPENCODE_READ_ONLY = ('{"*":"deny",'
-                       '"read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},'
+                       '"read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow","mcp:*":"deny"},'
                        '"glob":"allow","grep":"allow","list":"allow","todowrite":"allow","skill":"allow",'
                        '"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
                        '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
-# Plan and Unattended both run without plugins (--pure): a plugin's hooks run in OpenCode itself and
-# write where they like (oh-my-openagent keeps a .omo folder in the working folder), whatever the
-# rules above say about the model's tools. Auto and Full keep your plugins.
-_OPENCODE_PLAN = _OPENCODE_READ_ONLY
-_OPENCODE_UNATTENDED = _OPENCODE_READ_ONLY
+# The rules an agent carries come after every global rule, OPENCODE_PERMISSION included, so the agent a
+# run would otherwise get can turn a tool back on: your own default_agent, or one a plugin sets up
+# (oh-my-openagent's default agent turns task back on). Plan and Unattended run an agent of the
+# plugin's own instead, defined with the same rules in the config OpenCode reads last.
+OPENCODE_READ_ONLY_AGENT = "autopilot-read-only"
+_OPENCODE_READ_ONLY_CONFIG = ('{"agent":{"' + OPENCODE_READ_ONLY_AGENT + '":{"mode":"primary","permission":'
+                              + _OPENCODE_READ_ONLY + '}}}')
+_OPENCODE_READ_ONLY_ENV = {"OPENCODE_PERMISSION": _OPENCODE_READ_ONLY,
+                           "OPENCODE_CONFIG_CONTENT": _OPENCODE_READ_ONLY_CONFIG}
+# Plan and Unattended keep your plugins here, as Auto and Full do, so a model that a plugin provides
+# (Anthropic through an auth plugin) runs at every level. A plugin's own code still runs inside
+# OpenCode, outside every rule above, and writes where it likes (oh-my-openagent keeps a .omo folder
+# in the working folder).
 # Auto turns shell off for the same reason: left to ask, a command headed by cd with a redirection
 # is never asked about and writes wherever it points, outside the working folder included.
 _OPENCODE_AUTO = ('{"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow",'
@@ -96,10 +105,10 @@ LEVELS = (
                 "initPermissionMode": "plan",
             },
             "opencode": {
-                "caption": ("Built-in plan agent without plugins. Only reads run: edits, shell, web, subagents and "
-                            "every tool from a plugin or an MCP server are off."),
-                "argv": ["--pure", "--agent", "plan"],
-                "env": {"OPENCODE_PERMISSION": _OPENCODE_PLAN},
+                "caption": ("A read-only agent of the plugin's own, with your plugins loaded. Only reads run: edits, "
+                            "shell, web, subagents and every tool from a plugin or an MCP server are off."),
+                "argv": ["--agent", OPENCODE_READ_ONLY_AGENT],
+                "env": dict(_OPENCODE_READ_ONLY_ENV),
                 "initPermissionMode": None,
             },
             "codex": {
@@ -148,10 +157,11 @@ LEVELS = (
                 "initPermissionMode": "dontAsk",
             },
             "opencode": {
-                "caption": ("Without plugins. Edits, shell, web, subagents and every tool from a plugin or an MCP "
-                            "server are off, since nobody is there to approve them. Reads still work."),
-                "argv": ["--pure"],
-                "env": {"OPENCODE_PERMISSION": _OPENCODE_UNATTENDED},
+                "caption": ("A read-only agent of the plugin's own, with your plugins loaded. Edits, shell, web, "
+                            "subagents and every tool from a plugin or an MCP server are off, since nobody is there "
+                            "to approve them. Reads still work."),
+                "argv": ["--agent", OPENCODE_READ_ONLY_AGENT],
+                "env": dict(_OPENCODE_READ_ONLY_ENV),
                 "initPermissionMode": None,
             },
             "codex": {

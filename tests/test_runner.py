@@ -106,7 +106,7 @@ DIAG_RE = re.compile(r"^ap4a: (E_NOT_SYSTEMD|STALE|PAUSED|NEEDS_CONFIRM|MISSED|S
                      r"E_INTERNAL) job=[0-9a-f]{16} gen=[0-9]+$")
 ALLOWED_ENV = {"HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_CONFIG_HOME",
                "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "LANG", "NO_COLOR", "TERM", "PATH",
-               "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG",
+               "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_CONFIG_" + "CONTENT",
                "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_CRON",
                "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK", "PI_CODING_AGENT_SESSION_DIR"}
 V1_HARNESSES = ("claude", "opencode", "codex", "gemini")
@@ -410,7 +410,7 @@ class HarnessTests(Sandbox):
                            session="ses_abcdefgh12345678", model="anthropic/claude-opus-5")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/opencode"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/usr/bin/opencode", "run", "--format", "json",
-                                       "--pure", "--agent", "plan", "-m", "anthropic/claude-opus-5",
+                                       "--agent", "autopilot-read-only", "-m", "anthropic/claude-opus-5",
                                        "-s", "ses_abcdefgh12345678", "--fork"])
 
         count = 0
@@ -480,7 +480,8 @@ class HarnessTests(Sandbox):
                         allowed = {k for k, v in rules.items()
                                    if "al" + "low" in (set(v.values()) if isinstance(v, dict) else {v})}
                         self.assertLessEqual(allowed, set(edition.OPENCODE_READ_ONLY_TOOLS), allowed)
-                        self.assertIn("--pure", cmd["argv"][start:end])
+                        self.assertEqual(cmd["argv"][start:end], ["--agent", edition.OPENCODE_READ_ONLY_AGENT])
+                        self.assertIn(edition.OPENCODE_READ_ONLY_AGENT, cmd["env"]["OPENCODE_CONFIG_" + "CONTENT"])
         self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
 
     def test_agent_env_allowlist(self):
@@ -758,6 +759,18 @@ class SuperviseTests(SuperviseBase):
         result = classify.classify(out["state"], out["run"], level_id="plan")
         self.assertEqual(result["outcome"], "boundary_mismatch")
         self.assertEqual(out["state"]["initMode"], "default")
+
+    def test_auto_mode_off_is_stopped_with_its_own_reason(self):
+        # Claude Code starts in default mode where Auto mode is not on offer: still stopped at the first
+        # line, but failed with a reason that says why rather than as a boundary mismatch.
+        out = self.run_stub("claude", "wrong_init_mode", level="auto")
+        self.assertEqual((out["run"]["killedBy"], out["state"]["killDetail"]), ("boundary", "auto_off"))
+        self.assertLess(out["elapsed"], 10)
+        result = classify.classify(out["state"], out["run"], level_id="auto")
+        self.assertEqual((result["outcome"], result["detail"], result["reason"]),
+                         ("failed", "auto_off", "claude_auto_model"))
+        action = trigger.postrun(out["job"], result, int(time.time()), None)
+        self.assertEqual((action["status"], action["reason"]), ("failed", "claude_auto_model"))
 
     def test_init_tools_mismatch_kill(self):
         # Claude ignores a --tools name it does not know, so the tools it reports at start are checked.
@@ -2644,7 +2657,7 @@ class V2RunVerbTests(RunVerbBase):
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
                  "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
-                 "opencode_zen_tools": "opencode_zen_tools"}
+                 "opencode_zen_tools": "opencode_zen_tools", "claude_auto_model": "claude_auto_model"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")
