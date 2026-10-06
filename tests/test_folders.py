@@ -238,6 +238,27 @@ class FolderCheckTests(ScanCase):
                     folders.jobs.check_cwd(path)
                 self.assertEqual(caught.exception.code, "invalid_cwd")
 
+    def test_protected_folders_and_their_parents_are_refused(self):
+        # A job allowed to edit its working folder must not reach the plugin, the job store, an
+        # agent's settings or the folders agent binaries start from: not from inside, not from above.
+        for rel in folders.jobs.PROTECTED_CWD_REL:
+            self.mkdir(rel + "/inner")
+            self.assertEqual(self.check(os.path.join(self.home, rel)), ("refused", "protected"), rel)
+            self.assertEqual(self.check(os.path.join(self.home, rel, "inner")), ("refused", "protected"), rel)
+        for rel in (".config", ".local", ".local/share", ".local/state"):
+            self.assertEqual(self.check(os.path.join(self.home, rel)), ("refused", "protected"), rel)
+        for rel in (".config/nvim", ".local/share/notes", "code/api"):
+            self.mkdir(rel)
+            self.assertEqual(self.check(os.path.join(self.home, rel)), ("ok", None), rel)
+        # A link that leads into a protected folder is judged by where it leads.
+        os.symlink(os.path.join(self.home, ".claude"), os.path.join(self.home, "claude-settings"))
+        self.assertEqual(self.check(os.path.join(self.home, "claude-settings")), ("refused", "protected"))
+        # The plugin's own folder counts wherever it really is: a folder above it is refused too.
+        above = os.path.dirname(folders.fsio.plugin_dir())
+        self.assertIn(folders.jobs.cwd_verdict(above)[1], ("protected", "system", "root", "home"))
+        with self.assertRaises(ApError):
+            folders.jobs.check_cwd(os.path.join(self.home, ".config"))
+
     def test_a_link_is_judged_by_where_it_leads(self):
         api = self.mkdir("code/api")
         os.symlink(api, os.path.join(self.home, "api-link"))

@@ -46,7 +46,8 @@ REASON_FOR_CODE = {
     "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
-    "gemini_policy": "gemini_policy",
+    "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
+    "codex_project_config": "codex_project_config",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -586,6 +587,93 @@ def opencode_project_config(cwd):
     return False
 
 
+def _walk_to_fs_root(path):
+    """Folders from path up to the filesystem root, path first."""
+    current, dirs = path, []
+    while True:
+        dirs.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            return dirs
+        current = parent
+
+
+def _opencode_config_loads_plugins(path):
+    """True when an OpenCode config file would make OpenCode import plugin code, or cannot be read.
+
+    OpenCode skips an empty file and one it cannot parse; this refuses the second too, since what
+    it would load cannot be known here.
+    """
+    try:
+        data = fsio.read_file_nofollow(path, _CONFIG_CAP, owner_uid_or_root=True)
+    except ApError:
+        return True
+    if data is None or not data.strip():
+        return False
+    obj = _jsonc_object(data)
+    return obj is None or any(obj.get(key) for key in ("plugin", "plugins"))
+
+
+def opencode_preflight(cwd, home):
+    """First OpenCode refusal for a working folder, or None.
+
+    OpenCode imports and runs plugin code the moment it starts, before any permission or level
+    applies, and neither OPENCODE_DISABLE_PROJECT_CONFIG nor --pure stops it: every `.ts`/`.js`
+    under a `.opencode/plugin` or `.opencode/plugins` folder, and every entry under "plugin" or
+    "plugins" in an opencode.json or opencode.jsonc (a file, or an npm package it installs), found
+    in the working folder or any folder above it up to the repository root, or up to / outside a
+    repository. So a folder with any of these above it is refused: an unattended run there would
+    run that code. The home folder's own files are the user's and are skipped. Config that only
+    redefines agents, permissions, providers, MCP servers or tools is neutralised by the env flag,
+    not refused here.
+    """
+    path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
+    home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
+    if path is None or home_path is None:
+        return "opencode_plugin_code"
+    home_real = os.path.realpath(home_path)
+    # Walked to / even inside a repository: a stray .git folder that git itself does not take for
+    # a repository must not end the walk early.
+    for folder in _walk_to_fs_root(os.path.realpath(path)):
+        if folder == home_real:
+            continue
+        for name in ("plugin", "plugins"):
+            plugin_dir = os.path.join(folder, ".opencode", name)
+            try:
+                with os.scandir(plugin_dir) as it:
+                    if any(e.name.endswith((".ts", ".js", ".mjs", ".cjs")) for e in it):
+                        return "opencode_plugin_code"
+            except OSError:
+                continue
+        for config_dir in (folder, os.path.join(folder, ".opencode")):
+            for name in ("opencode.json", "opencode.jsonc"):
+                if _opencode_config_loads_plugins(os.path.join(config_dir, name)):
+                    return "opencode_plugin_code"
+    return None
+
+
+def codex_preflight(cwd, home):
+    """First Codex refusal for a working folder, or None.
+
+    Once Codex trusts a folder it loads `.codex/config.toml` from every folder between the project
+    root and the working folder, and that config can start MCP servers outside the sandbox or have
+    a reviewer lift it. A workspace-write run trusts a new folder by itself, and the trust stays for
+    every later run there, Plan included; and the project root is not simply the nearest `.git`
+    (an empty `.git` folder does not count, and user settings can name other markers). So a folder
+    with `.codex/config.toml` in it or in any folder above it, up to /, is refused. The home
+    folder's `.codex` is the user's own Codex settings and is skipped. Stat only; nothing is opened.
+    """
+    path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
+    home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
+    if path is None or home_path is None:
+        return "codex_project_config"
+    home_real = os.path.realpath(home_path)
+    for folder in _walk_to_fs_root(os.path.realpath(path)):
+        if folder != home_real and os.path.exists(os.path.join(folder, ".codex", "config.toml")):
+            return "codex_project_config"
+    return None
+
+
 def opencode_verbose(exec_prefix, provider, deadline_s):
     """parse_verbose_blocks of `opencode models <provider> --verbose` (20 s, 1 MiB), or None."""
     if provider not in ("opencode", "opencode-go") or not _exec_ok(exec_prefix):
@@ -742,10 +830,20 @@ def cursor_trusted(workspace_real, home):
 
 
 def cursor_cli_config_verdict(obj):
-    """cursor_autorun_config | cursor_network_config | None for a parsed cli-config.json object."""
+    """cursor_autorun_config | cursor_network_config | None for a parsed cli-config.json object.
+
+    Only an absent approval mode or "allowlist" is accepted; "auto-review" and "unrestricted" both
+    let Cursor run tools without asking, which nobody is there to answer. A non-empty permissions
+    allow list is the same (it pre-approves Shell, Write, WebFetch or MCP), so it is refused too.
+    """
     if not isinstance(obj, dict):
         return None
-    if obj.get("approvalMode") == "unrestricted":
+    mode = obj.get("approvalMode")
+    if mode is not None and mode != "allowlist":
+        return "cursor_autorun_config"
+    permissions = obj.get("permissions")
+    allow = permissions.get(_ALLOW_KEY) if isinstance(permissions, dict) else None
+    if (allow if isinstance(allow, list) else []) or (allow and not isinstance(allow, list)):
         return "cursor_autorun_config"
     sandbox = obj.get("sandbox")
     if isinstance(sandbox, dict) and sandbox.get("networkAccess") == "allow_all":
@@ -754,44 +852,68 @@ def cursor_cli_config_verdict(obj):
 
 
 def claude_project_allow_nonempty(obj):
-    """True when a .claude/settings.json object carries a non-empty permissions allow list."""
-    permissions = obj.get("permissions") if isinstance(obj, dict) else None
+    """True when a .claude settings object carries a non-empty permissions allow list or hooks.
+
+    Both are things Cursor applies from an imported Claude config: allow rules pre-approve tools,
+    and a hook is a command Cursor runs on its own.
+    """
+    if not isinstance(obj, dict):
+        return False
+    permissions = obj.get("permissions")
     rules = permissions.get(_ALLOW_KEY) if isinstance(permissions, dict) else None
-    if isinstance(rules, list):
-        return len(rules) > 0
-    return bool(rules)
+    if (len(rules) > 0 if isinstance(rules, list) else bool(rules)):
+        return True
+    hooks = obj.get("hooks")
+    return bool(hooks) if isinstance(hooks, (dict, list)) else False
 
 
 def cursor_preflight(cwd, home, env):
     """First Cursor preflight refusal for a working folder, or None (table 6.2).
 
-    Reads only <config>/cli-config.json and <repository root>/.claude/settings.json; everything
-    else is a stat. A config file that exists but cannot be read or parsed refuses, because what
-    it would allow cannot be known.
+    Reads only cli-config.json in Cursor's config folders and the repository root's .claude
+    settings; everything else is a stat. A config file that exists but cannot be read or parsed
+    refuses, because what it would allow cannot be known.
     """
     workspace = _clean_abs(cwd, consts.CWD_MAX_BYTES)
     home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
     if workspace is None or home_path is None:
         return "cursor_project_rules"
-    config_path = os.path.join(cursor_config_dir(env), "cli-config.json")
-    obj, refused = _read_config(config_path, _CONFIG_CAP)
-    if refused or (obj is None and os.path.lexists(config_path)):
-        return "cursor_autorun_config"
-    verdict = cursor_cli_config_verdict(obj)
-    if verdict is not None:
-        return verdict
+    # Both places Cursor keeps cli-config.json are checked, $XDG_CONFIG_HOME/cursor and
+    # ~/.cursor, so a setting in the one this run might not have been expected to read still counts.
+    config_paths = [os.path.join(cursor_config_dir(env), "cli-config.json")]
+    legacy = os.path.join(home_path, ".cursor", "cli-config.json")
+    if legacy not in config_paths:
+        config_paths.append(legacy)
+    for config_path in config_paths:
+        obj, refused = _read_config(config_path, _CONFIG_CAP)
+        if refused or (obj is None and os.path.lexists(config_path)):
+            return "cursor_autorun_config"
+        verdict = cursor_cli_config_verdict(obj)
+        if verdict is not None:
+            return verdict
 
     real = os.path.realpath(workspace)
+    home_real = os.path.realpath(home_path)
     folders = _walk_to_git_root(real)
-    if any(os.path.lexists(os.path.join(folder, ".cursor", "cli.json")) for folder in folders):
-        return "cursor_project_rules"
-    root = folders[-1]
-    if root != os.path.realpath(home_path):
-        settings_path = os.path.join(root, ".claude", "settings.json")
-        settings, refused = _read_config(settings_path, _CONFIG_CAP)
-        if refused or (settings is None and os.path.lexists(settings_path)) \
-                or claude_project_allow_nonempty(settings):
+    # Cursor's own project files are read from the folder up to the git root: its CLI rules, and
+    # the hooks and MCP servers it would run. Each is refused anywhere on that walk. The user's own
+    # ~/.cursor is theirs, so the home folder itself is never one of a project's rules.
+    for folder in folders:
+        if folder == home_real:
+            continue
+        if any(os.path.lexists(os.path.join(folder, ".cursor", name))
+               for name in ("cli.json", "hooks.json", "mcp.json")):
             return "cursor_project_rules"
+    # Cursor imports a Claude config from the repository root (settings.json and the untracked
+    # settings.local.json), applying its allow rules and hooks. The user's own ~/.claude is theirs.
+    root = folders[-1]
+    if root != home_real:
+        for name in ("settings.json", "settings.local.json"):
+            settings_path = os.path.join(root, ".claude", name)
+            settings, refused = _read_config(settings_path, _CONFIG_CAP)
+            if refused or (settings is None and os.path.lexists(settings_path)) \
+                    or claude_project_allow_nonempty(settings):
+                return "cursor_project_rules"
 
     if not cursor_trusted(real, home_path):
         return "cursor_untrusted"
@@ -991,6 +1113,14 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2b. Gemini CLI: the admin policy that keeps a headless job in its approval mode must apply
     if code is None and harness_id == "gemini" and harness.gemini_policy_wanted(job.get("level")):
         code = gemini_policy_gate()
+
+    # 2c. OpenCode: plugin code in or above the working folder runs at start, before any level
+    if code is None and harness_id == "opencode":
+        code = opencode_preflight(cwd, home)
+
+    # 2d. Codex: a folder's own .codex/config.toml loads once Codex trusts the folder, past any level
+    if code is None and harness_id == "codex":
+        code = codex_preflight(cwd, home)
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None

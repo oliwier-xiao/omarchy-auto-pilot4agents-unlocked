@@ -110,8 +110,11 @@ def _paid_fn(name):
     return fn if callable(fn) else None
 
 
-def new_stream_state(harness, expected_init_mode, *, allow_paid=False, provider=None, level_id="plan", billing=None):
-    return {"harness": harness, "expectedMode": expected_init_mode, "initMode": None, "initSeen": False,
+def new_stream_state(harness, expected_init_mode, *, allow_paid=False, provider=None, level_id="plan", billing=None,
+                     expected_tools=None):
+    tools = frozenset(expected_tools) if expected_tools is not None else None
+    return {"harness": harness, "expectedMode": expected_init_mode, "expectedTools": tools, "initMode": None,
+            "initSeen": False,
             "sessionId": None, "rateLimit": None, "result": None, "assistantError": None,
             "errorTexts": [], "toolViolations": 0, "turnCompleted": False, "turnFailed": False, "lines": 0,
             "errorEvents": 0, "contentEvents": 0, "document": None, "topKeys": [], "targetSession": None,
@@ -192,6 +195,13 @@ def _feed_claude(state, obj):
             return _kill(state, "api_key_source", "kill_paid")
         if state["expectedMode"] is not None and state["initMode"] != state["expectedMode"]:
             return _kill(state, "init_mode")
+        # Claude drops a --tools name it does not know without a word, so the tools it reports are
+        # checked against the level's list, and no MCP server may have started.
+        if state["expectedTools"] is not None:
+            tools, servers = obj.get("tools"), obj.get("mcp_servers")
+            if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools) \
+                    or not set(tools) <= state["expectedTools"] or servers != []:
+                return _kill(state, "init_tools")
         return None
     if kind == "rate_limit_event":
         info = obj.get("rate_limit_info")

@@ -27,11 +27,34 @@ SCHEMA_VERSION = 1
 
 HARNESS_IDS = ("claude", "opencode", "codex", "cursor", "pi", "gemini")
 
+# A folder's Claude config (.claude/settings.json, settings.local.json, .mcp.json, agents) loads
+# unprompted under -p and can run hooks, redirect the login with ANTHROPIC_BASE_URL or widen the
+# run; a cloned folder is the user's own, so the private-folder check does not stop it. Every
+# Claude run is pinned to the user's own settings only, takes no MCP from a folder, and writes no
+# durable auto-memory or scheduled-task file that a later run would reload.
+_CLAUDE_ISOLATION = ("--setting-sources", "user", "--strict-mcp-config")
+_CLAUDE_ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CRON": "1"}
+# Plan and Unattended name the only tools Claude may offer. Otherwise Plan hands shell, web and
+# subagent calls to Claude's own auto-mode classifier, which can approve them, and tools such as
+# EnterWorktree, RemoteTrigger and CronCreate need no permission at all. Unattended keeps every tool a
+# user's own allow rules can open, but may not write Claude's own settings or memory, here or in the
+# working folder, which Write and Edit can otherwise do with no rule. The runner checks that the
+# tools Claude reports at start are among these (runner._spawn).
+CLAUDE_PLAN_TOOLS = "Glob,Grep,Read"
+CLAUDE_UNATTENDED_TOOLS = "Bash,Edit,Glob,Grep,NotebookEdit,Read,WebFetch,WebSearch,Write"
+_CLAUDE_CONFIG_WRITES = "Write(~/.claude/**),Edit(~/.claude/**),Write(.claude/**),Edit(.claude/**)"
+
+
 _OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
                   '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
-_OPENCODE_UNATTENDED = ('{"edit":"ask","bash":"ask","webfetch":"ask","websearch":"ask",'
-                        '"task":"ask","external_directory":"deny","doom_loop":"deny"}')
-_OPENCODE_AUTO = ('{"edit":"allow","bash":"ask","webfetch":"allow","websearch":"allow",'
+# Unattended turns the same tools off as Plan rather than leaving them to ask. Nobody is there to
+# answer either way, but a tool that is off is never offered to the model, while one left to ask is
+# offered and checked call by call, which OpenCode does not do for every command.
+_OPENCODE_UNATTENDED = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
+                        '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
+# Auto turns shell off for the same reason: left to ask, a command headed by cd with a redirection
+# is never asked about and writes wherever it points, outside the working folder included.
+_OPENCODE_AUTO = ('{"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"deny","doom_loop":"deny"}')
 _OPENCODE_FULL = ('{"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"allow","doom_loop":"allow"}')
@@ -50,8 +73,9 @@ LEVELS = (
         "harness": {
             "claude": {
                 "caption": "Plan mode. Claude reads and proposes a plan. It does not edit files or run commands.",
-                "argv": ["--permission-mode", "plan", "--permission-prompts", "none"],
-                "env": {},
+                "argv": (["--permission-mode", "plan", "--permission-prompts", "none", "--tools", CLAUDE_PLAN_TOOLS]
+                         + list(_CLAUDE_ISOLATION)),
+                "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "plan",
             },
             "opencode": {
@@ -100,12 +124,13 @@ LEVELS = (
         "harness": {
             "claude": {
                 "caption": "Only what your own Claude permission rules already allow. Anything that would ask is denied.",
-                "argv": ["--permission-mode", "dontAsk", "--permission-prompts", "none"],
-                "env": {},
+                "argv": (["--permission-mode", "dontAsk", "--permission-prompts", "none", "--tools", CLAUDE_UNATTENDED_TOOLS,
+                          "--disallowedTools", _CLAUDE_CONFIG_WRITES] + list(_CLAUDE_ISOLATION)),
+                "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "dontAsk",
             },
             "opencode": {
-                "caption": "Edits, shell, web and subagents would ask, so they are rejected. Reads still work.",
+                "caption": "Edits, shell, web and subagents are off, since nobody is there to approve them. Reads still work.",
                 "argv": [],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_UNATTENDED},
                 "initPermissionMode": None,
@@ -139,12 +164,12 @@ LEVELS = (
             "claude": {
                 "caption": ("Auto mode. Claude's classifier approves actions it judges safe and blocks risky ones. "
                             "Nothing asks you."),
-                "argv": ["--permission-mode", "auto", "--permission-prompts", "none"],
-                "env": {},
+                "argv": ["--permission-mode", "auto", "--permission-prompts", "none"] + list(_CLAUDE_ISOLATION),
+                "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "auto",
             },
             "opencode": {
-                "caption": "Edits, web and subagents run. Shell commands would ask, so they are rejected.",
+                "caption": "Edits, web and subagents run. Shell commands are off, since nobody is there to approve them.",
                 "argv": [],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_AUTO},
                 "initPermissionMode": None,
@@ -162,7 +187,7 @@ LEVELS = (
                 "initPermissionMode": None,
             },
             "pi": {
-                "caption": "Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands.",
+                "caption": "Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands, but Pi keeps no edit inside the working folder: it can write any file you can.",
                 "argv": _PI_BASE + ["--tools", "read,grep,find,ls,edit,write"],
                 "env": dict(_PI_ENV),
                 "initPermissionMode": None,
@@ -182,8 +207,8 @@ LEVELS = (
         "harness": {
             "claude": {
                 "caption": "Bypass permissions. Claude edits files and runs any command without asking.",
-                "argv": ["--permission-mode", "bypassPermissions", "--permission-prompts", "none"],
-                "env": {},
+                "argv": ["--permission-mode", "bypassPermissions", "--permission-prompts", "none"] + list(_CLAUDE_ISOLATION),
+                "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "bypassPermissions",
             },
             "opencode": {

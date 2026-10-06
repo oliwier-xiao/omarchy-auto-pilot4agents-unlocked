@@ -60,10 +60,7 @@ omarchy restart shell
 
 The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
 
-Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps,
-jobs first: see [Removal](#removal).
-
-Update with `omarchy plugin update oliwier.auto-pilot4agents`. Removal takes three steps, jobs
+Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps, jobs
 first: see [Removal](#removal).
 
 ## Dependencies
@@ -211,7 +208,7 @@ There are exactly four levels. The helper refuses any other value, whether it co
 | Agent | Plan (default) | Unattended |
 |---|---|---|
 | Claude Code | Plan mode. Claude reads and proposes a plan. It does not edit files or run commands. | Only what your Claude permission rules already allow. Anything that would ask is denied. |
-| OpenCode | Built-in plan agent without plugins. Edits, shell, web and subagents are denied. | Edits, shell, web and subagents would ask, so they are rejected. Reads still work. |
+| OpenCode | Built-in plan agent without plugins. Edits, shell, web and subagents are denied. | Edits, shell, web and subagents are off, since nobody is there to approve them. Reads still work. |
 | Codex | Read-only sandbox. Codex can read files but cannot write or reach the network. | Workspace-write sandbox. Codex can edit inside the working folder. Network stays off. |
 | Gemini CLI | Plan mode. Gemini reads and plans. It does not edit files or run commands. | Default approval. Tools that would ask are denied. |
 | Cursor Agent | Ask mode. Cursor reads and answers, and anything that would need your approval is denied, so no file is edited. | Not offered. Cursor applies file edits headless only with `--force`. Pick Full access for that. |
@@ -222,11 +219,11 @@ There are exactly four levels. The helper refuses any other value, whether it co
 | Agent | Auto | Full access |
 |---|---|---|
 | Claude Code | Auto mode. Claude's classifier approves actions it judges safe and blocks risky ones. Nothing asks you. | Bypass permissions. Claude edits files and runs any command without asking. |
-| OpenCode | Edits, web and subagents run. Shell commands would ask, so they are rejected. | Every permission is allowed, shell, web and folders outside the working folder included. |
+| OpenCode | Edits, web and subagents run. Shell commands are off, since nobody is there to approve them. | Every permission is allowed, shell, web and folders outside the working folder included. |
 | Codex | Automatic review in the workspace-write sandbox. A reviewer approves or denies what would ask. | No approvals and no sandbox. Codex runs any command with your user's access. |
 | Gemini CLI | Auto edit. File edits are approved. Shell commands would ask, so they are denied. | YOLO mode. Every tool call is approved, shell commands included. |
 | Cursor Agent | Not offered. Cursor has no automatic review of its own. | Force mode, workspace trusted, sandbox off. Cursor applies edits and runs commands without asking. |
-| Pi | Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands. | Every built-in tool: read, bash, edit, write, grep, find and ls. |
+| Pi | Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands, but Pi keeps no edit inside the working folder: it can write any file you can. | Every built-in tool: read, bash, edit, write, grep, find and ls. |
 
 Plan and Unattended never widen what an agent may do: a job only does what the agent's own configuration already allows without asking. Auto hands each decision to the agent's own automatic review, which can be wrong. Full access has no checks at all, and the job runs with your user's access to your files, your shell and the network. The systemd limits under [The timer](#the-timer) still apply, and the prompt still travels only on standard input.
 
@@ -408,7 +405,7 @@ opencode run --format json <level> [-m <model>]
        new:    --title autopilot-<job id prefix>
        <stdin>
 
-codex exec <level> --json --color never -o <runs folder>/<job id>-g<n>.last.txt [--skip-git-repo-check] [-m <model>]
+codex exec --ignore-rules <level> --json --color never -o <runs folder>/<job id>-g<n>.last.txt [--skip-git-repo-check] [-m <model>]
        resume: resume <session id> -
        fork:   fork <session id> -
        new:    -
@@ -431,7 +428,7 @@ pi --mode json <level> --provider <provider> --model <model>
        <stdin>
 ```
 
-Every agent starts in the job's working folder, and the folder is never one of its arguments. To resume or fork a Pi session, Pi is told the folder that holds the session file in its environment (`PI_CODING_AGENT_SESSION_DIR`), and the session by its id: the file's path names the project.
+Every agent starts in the job's working folder, and the folder is never one of its arguments. Pi is always told the folder for its session in its environment (`PI_CODING_AGENT_SESSION_DIR`) rather than on the command line: for a resume or fork it is the folder that holds the session file, and for a new session the folder Pi would file it in, so a project's own Pi settings cannot send the transcript elsewhere.
 
 `--max-budget-usd` is passed only when **Allow paid usage** is on. `--skip-git-repo-check` is added only after you confirm a Codex job in a folder that is not a git repository. The turn and budget limits exist only for Claude. Every agent is also bound by the job's runtime limit. Cursor Agent and Pi get no prompt word at all: both read the prompt from standard input until it ends.
 
@@ -440,22 +437,29 @@ Every agent starts in the job's working folder, and the folder is never one of i
 The level becomes exactly these flags and variables:
 
 ```
-Claude Code   plan         --permission-mode plan --permission-prompts none
+Claude Code   plan         --permission-mode plan --permission-prompts none --tools Glob,Grep,Read
+                           --setting-sources user --strict-mcp-config
               unattended   --permission-mode dontAsk --permission-prompts none
-              auto         --permission-mode auto --permission-prompts none
-              full         --permission-mode bypassPermissions --permission-prompts none
+                           --tools Bash,Edit,Glob,Grep,NotebookEdit,Read,WebFetch,WebSearch,Write
+                           --disallowedTools Write(~/.claude/**),Edit(~/.claude/**),Write(.claude/**),Edit(.claude/**)
+                           --setting-sources user --strict-mcp-config
+              auto         --permission-mode auto --permission-prompts none --setting-sources user --strict-mcp-config
+              full         --permission-mode bypassPermissions --permission-prompts none --setting-sources user --strict-mcp-config
+              every level  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 CLAUDE_CODE_DISABLE_CRON=1
 
 OpenCode      plan         --pure --agent plan
                            OPENCODE_PERMISSION={"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny","doom_loop":"deny"}
-              unattended   OPENCODE_PERMISSION={"edit":"ask","bash":"ask","webfetch":"ask","websearch":"ask","task":"ask","external_directory":"deny","doom_loop":"deny"}
-              auto         OPENCODE_PERMISSION={"edit":"allow","bash":"ask","webfetch":"allow","websearch":"allow","task":"allow","external_directory":"deny","doom_loop":"deny"}
+              unattended   OPENCODE_PERMISSION={"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny","doom_loop":"deny"}
+              auto         OPENCODE_PERMISSION={"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow","task":"allow","external_directory":"deny","doom_loop":"deny"}
               full         --auto
                            OPENCODE_PERMISSION={"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow","task":"allow","external_directory":"allow","doom_loop":"allow"}
+              every level  OPENCODE_DISABLE_PROJECT_CONFIG=1
 
 Codex         plan         -s read-only
               unattended   -s workspace-write
               auto         --approve-for-me
               full         --dangerously-bypass-approvals-and-sandbox
+              every level  --ignore-rules
 
 Gemini CLI    plan         --approval-mode plan
               unattended   --approval-mode default
@@ -504,20 +508,21 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - Before arming, the panel shows the exact command, the working folder, the binary, what the level means and what paid usage allows.
 - Arming is bound to a digest of the agent, the binary's path, the session, the level, the limits, the model, the Pi provider, the paid usage setting, the trigger kind and the prompt's hash. If any of them changes before the job fires, it does not run and asks you to check it.
 - Agent binaries come only from the fixed locations listed under [Dependencies](#dependencies), and version-manager shims are refused. Each binary must be a regular file owned by you or root that nobody else can write, in folders nobody else can write, and it is checked again right before it runs.
-- The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, and `OPENCODE_PERMISSION` for OpenCode. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin`, the three `PI_*` variables above and, to resume or fork a session, `PI_CODING_AGENT_SESSION_DIR`. API keys, tokens and display variables are never passed on.
+- The agent gets a short list of environment variables. Claude Code, OpenCode, Codex and Gemini CLI get `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, the `XDG_*_HOME` folders, `NO_COLOR=1`, `TERM=dumb`, `PATH=/usr/bin:/bin:$HOME/.local/bin`, `OPENCODE_PERMISSION` and `OPENCODE_DISABLE_PROJECT_CONFIG=1` for OpenCode, and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` with `CLAUDE_CODE_DISABLE_CRON=1` for Claude Code. Cursor Agent gets `HOME`, `USER`, `LOGNAME`, `LANG`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `TERM=dumb`, `NO_COLOR=1` and `PATH=/usr/bin:/bin`. Pi gets `HOME`, `LANG`, `TERM=dumb`, `PATH=/usr/bin:/bin`, the three `PI_*` variables above and `PI_CODING_AGENT_SESSION_DIR`, the folder for its session. API keys, tokens and display variables are never passed on.
 - The working folder is the session's own recorded folder, or the one you pick for a new session. `/`, your home folder itself, `/tmp`, `/run`, the plugin folder and `~/.config/omarchy/plugins` are refused. No project is `~/AutoPilot`, which passes the same check.
 - The working folder has to be yours and writable by you alone, and so does the agent configuration already in it: `.claude`, `.codex`, `.cursor`, `.gemini`, `.opencode`, `.pi`, `.mcp.json`, `opencode.json`, `opencode.jsonc`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and everything directly inside those folders must belong to you or root, with nobody else able to write to them. Whoever could change them would choose the hooks, allow rules, MCP servers and instructions a run loads while nobody is watching. This is checked when you arm a job and again when it fires.
 - A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot`, its bytecode cache and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
 - Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session id, and for Gemini CLI the path of the plugin's own policy file. Never a folder (the working folder, one the folder picker walks or one it lists sessions for), a session file's path, a job's label, a notification's text, a prompt, a key or a token: the agent starts in its working folder instead of being told it, the panel sends every folder and every search to the helper on standard input, and a notification goes to the session bus over the bus's own socket rather than through a program.
 - The system tools it calls (`systemd-run`, `systemctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
 - Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. Besides its own state and runtime folders, the only folder it makes is `~/AutoPilot`, mode 0700, when you pick No project for a new session and nothing is there yet. Whatever is already at that path is used only when it is a folder of yours, not a link, that nobody else can write; anything else is left as it is and refused. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
+- A run is pinned to your own settings, not a folder's. A working folder cloned from elsewhere is yours too, so its own agent configuration could otherwise run code, take the sign-in or widen the run while nobody is watching. Claude Code reads only your user settings and no folder MCP (`--setting-sources user --strict-mcp-config`) and does not write its durable memory or scheduled tasks; Plan offers Claude only Glob, Grep and Read, and Unattended only the tools your own allow rules can open, never a write to Claude's own settings or memory (`--tools`, `--disallowedTools`), so neither reaches a tool that needs no permission (subagents, worktrees, remote triggers) or, in Plan, the auto-mode classifier that could approve a command; a run whose start reports any other tool, or an MCP server, is stopped; OpenCode never loads a folder's `opencode.json` or `.opencode` (`OPENCODE_DISABLE_PROJECT_CONFIG=1`), and a folder with OpenCode plugin code in it or in any folder above it (a `.opencode/plugin` folder, or a plugin listed under `plugin` in an `opencode.json`) is refused, because OpenCode runs that code at startup whatever the level, and that flag does not stop it (keep your own plugins in `~/.config/opencode`, where they still load); Codex drops the execpolicy allow rules that would leave its sandbox (`--ignore-rules`), and a folder with its own `.codex/config.toml`, in it or in any folder above it, is refused, because Codex loads that file once it trusts the folder and it can start programs outside the sandbox; and a Cursor folder with its own CLI rules, hooks, MCP servers or imported Claude allow rules is refused, as before.
 
 ### What it reads, and what it never opens
 
 Every read is size-capped, does not follow links and keeps only the fields listed. Two places resolve a link: the folder tree, only to tell whether it leads to a folder inside your home folder, never opening one; and the working folder check, which judges a folder and the agent configuration in it by what a link leads to, the way the agent would load it.
 
-- **Read:** the plugin's own `bin/autopilot/gemini-policy.toml`, and the names in `/etc/gemini-cli/policies` (only whether one ends in `.toml`), before a Gemini job below Full access; the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` or `~/.cursor` (its approval and network settings); `.claude/settings.json` in the git root of a Cursor job's folder (whether it has allow rules); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores Where to run lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only); before a new session in a folder, that folder's owner and mode and those of the agent configuration entries in it (`.claude/`, `.codex/`, `CLAUDE.md`, `AGENTS.md` and the like) and of the entries directly inside those folders, at most 256 each, the same check a job gets when it is armed; `/proc/self/mountinfo`, to know where other file systems are mounted; for the folder tree, the names of the subfolders of one folder of your home folder at a time (hidden ones only after `Ctrl+H`), whether each has a `.git` entry (looked at with lstat, never opened), and who owns the folder a link leads to when that folder is inside your home folder; for a folder search, the names of the folders under your home folder, down to 8 levels, never inside a hidden folder, another file system or a link (a folder another file system is mounted on is not even opened), and never inside `node_modules`, `build`, `dist`, `target`, `venv` and the like (their names are matched, their insides are not read). Only the 40 best matches reach the panel, with whose folder each is and whether it has a `.git` entry. Nothing is written or kept between searches.
-- **Looked at, never opened:** `.cursor/cli.json` in a Cursor job's folder and its parents; `~/.cursor/projects/<folder>/.workspace-trusted`; Cursor chat folders and their `store.db-wal` times; `opencode.json`, `opencode.jsonc` and `.opencode/` in an OpenCode job's folder.
+- **Read:** the plugin's own `bin/autopilot/gemini-policy.toml`, and the names in `/etc/gemini-cli/policies` (only whether one ends in `.toml`), before a Gemini job below Full access; the usage records in `~/.local/state/omarchy/agents/usage/` and `~/.cache/omarchy/agent-usage/claude-limits.json` (limits, plan name, update time); `~/.gemini/settings.json` (the selected sign-in type and default model); `~/.claude/settings.json` (the `model` setting and the `ANTHROPIC_DEFAULT_*_MODEL` pins); Cursor's `cli-config.json` in `$XDG_CONFIG_HOME/cursor` and `~/.cursor` (its approval and network settings); `.claude/settings.json` and `.claude/settings.local.json` in the git root of a Cursor job's folder (whether they have allow rules or hooks); `opencode.json` and `opencode.jsonc`, at the top and in `.opencode/`, in an OpenCode job's folder and every folder above it but your home folder (whether they list plugins); the global `opencode.json` or `opencode.jsonc` (the default model) and `~/.cache/opencode/models.json` (model names and prices); the session stores Where to run lists (the first records of Claude transcripts and Pi session files, and the OpenCode and Codex databases opened read-only); before a new session in a folder, that folder's owner and mode and those of the agent configuration entries in it (`.claude/`, `.codex/`, `CLAUDE.md`, `AGENTS.md` and the like) and of the entries directly inside those folders, at most 256 each, the same check a job gets when it is armed; `/proc/self/mountinfo`, to know where other file systems are mounted; for the folder tree, the names of the subfolders of one folder of your home folder at a time (hidden ones only after `Ctrl+H`), whether each has a `.git` entry (looked at with lstat, never opened), and who owns the folder a link leads to when that folder is inside your home folder; for a folder search, the names of the folders under your home folder, down to 8 levels, never inside a hidden folder, another file system or a link (a folder another file system is mounted on is not even opened), and never inside `node_modules`, `build`, `dist`, `target`, `venv` and the like (their names are matched, their insides are not read). Only the 40 best matches reach the panel, with whose folder each is and whether it has a `.git` entry. Nothing is written or kept between searches.
+- **Looked at, never opened:** `.cursor/cli.json`, `.cursor/hooks.json` and `.cursor/mcp.json` in a Cursor job's folder and its parents; the file names in `.opencode/plugin` and `.opencode/plugins` in an OpenCode job's folder and every folder above it; `.codex/config.toml` in a Codex job's folder and every folder above it but your home folder; `~/.cursor/projects/<folder>/.workspace-trusted`; Cursor chat folders and their `store.db-wal` times; `opencode.json`, `opencode.jsonc` and `.opencode/` in an OpenCode job's folder.
 - **Never opened:** `~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/models.json`, `~/.local/share/opencode/auth.json`, `~/.config/cursor/auth.json`, Cursor's `state.vscdb` and chat databases, and Gemini's sign-in files. No command that prints a key or a token is ever run.
 - **Checks it runs without a prompt**, with the agent's own environment and a time and size limit: `codex login status`, `pi auth check --provider <provider> --json --no-refresh`, `cursor-agent status` (only whether it is signed in is kept), and the model listings under [Models](#models).
 
@@ -542,11 +547,11 @@ Every read is size-capped, does not follow links and keeps only the fields liste
 - **Sleep.** If the computer sleeps, the job runs when it wakes (within 15 minutes, or 3 hours for reset jobs). Auto Pilot does not keep the computer awake and does not wake it.
 - **Logout.** Jobs run only while you are logged in. Missed jobs are offered when you log back in.
 - **Missed jobs.** They stay in the Queue marked missed, with Run now, for 24 hours. After that their stored prompt is deleted and they move to History, where Edit and re-arm asks you to write the prompt again.
-- **Codex.** It stays disabled in the panel until `codex login status` reports a signed-in account. Its chip carries a warning glyph; choosing it opens a sign-in popup with the exact command to run, `codex login`, and a **Check again** button.
+- **Codex.** It stays disabled in the panel until `codex login status` reports a signed-in account. Its chip carries a warning glyph; choosing it opens a sign-in popup with the exact command to run, `codex login`, and a **Check again** button. A Codex run that may write (`-s workspace-write`) has Codex mark a new folder trusted in `~/.codex/config.toml` by itself, as it does when you run it; Auto Pilot refuses any folder with its own `.codex/config.toml`, so that trust has nothing of the folder's to load.
 - **Gemini CLI.** Its sign-in cannot be checked without a run, so its chip carries the same warning glyph until the first job ends, and its sign-in popup says to run `gemini` once and pick a sign-in there. Gemini refuses to work in a folder it does not trust yet, so trust the folder in Gemini first. Gemini sessions cannot be forked.
 - **Cursor Agent.** Only Plan and Full access are offered, chats cannot be forked, and a monthly limit ends the job without a retry. Cursor has to trust the folder first. On-demand usage is a Cursor account setting that Auto Pilot cannot switch off.
 - **Pi.** Unattended is not offered, every job needs a provider and a model, and Pi reports a finished run even when the provider failed, so Auto Pilot judges the run by Pi's last answer rather than its exit code.
-- **Editing files with Claude.** An Unattended Claude job edits files only where your own Claude permission rules already allow it. Auto and Full access edit without asking.
+- **Editing files with Claude.** An Unattended Claude job edits files only where your own Claude permission rules already allow it. Claude's WebFetch also reads a fixed list of documentation sites (docs.python.org and the like) without a rule, and Unattended keeps that. Auto and Full access edit without asking.
 - **Auto and Full access are unverified live.** Their flags come from each agent's own `--help`. The helper and panel tests cover the commands they build, but no scheduled run at these levels has been watched end to end yet.
 - **Project settings.** Hooks and MCP servers configured in the working folder run as they would in a terminal. Pi reads the folder's context files, as it does in a terminal. Auto Pilot only makes sure nobody but you can change them; what they do is up to you.
 - **Resuming.** A job that resumes a session adds its turns to that session. Fork the session if you want the original left untouched.

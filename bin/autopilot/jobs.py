@@ -31,6 +31,14 @@ _SESSION_PATH_MAX = 4096
 # whatever HOME itself sits under.
 REFUSED_CWD_PREFIXES = ("/tmp", "/run")
 
+# Folders below HOME that a job may neither run in nor contain: Omarchy's settings with every
+# plugin (this one included) and the kill switch, the job store with its prompts, each agent's own
+# configuration, and the folders agent binaries are started from. A level that may edit its working
+# folder could otherwise change what a later job runs, or how far it may go, ahead of time.
+PROTECTED_CWD_REL = (".config/omarchy", ".local/state/omarchy", ".local/bin", ".local/share/mise",
+                     ".claude", ".codex", ".gemini", ".cursor", ".pi", ".opencode",
+                     ".config/opencode", ".local/share/opencode", ".config/cursor")
+
 # What an agent loads from its working folder by itself: project settings with hooks and allow
 # rules, MCP server lists, instruction files. A headless run loads them with nobody there to answer
 # a trust prompt, so each one present has to be as private as the folder (see check_cwd).
@@ -275,8 +283,9 @@ def validate_draft(draft, *, require_prompt):
     if expect is not None and not (isinstance(expect, str) and consts.DIGEST_RE.fullmatch(expect)):
         raise ApError("bad_input", "expectCommandDigest")
 
-    # Pi trims the prompt and runs one that starts with / as a command, swallowing it.
-    if harness == "pi" and isinstance(prompt, str) and prompt.lstrip().startswith("/"):
+    # Pi trims the prompt and runs one that starts with / as a command, swallowing it. Pi's trim
+    # also drops a leading byte-order mark, which str.lstrip() keeps, so strip it before the test.
+    if harness == "pi" and isinstance(prompt, str) and re.sub(r"^[\s﻿]+", "", prompt).startswith("/"):
         raise ApError("pi_slash_prompt", "prompt")
 
     return {
@@ -313,7 +322,8 @@ def cwd_verdict(path):
 
     The one place the working folder rule lives; check_cwd turns any reason into invalid_cwd,
     and the folder picker turns it into a sentence before a job is ever drafted. Reasons:
-    unclean, root, home, system, plugin, missing, denied, not_dir, not_own, shared, config.
+    unclean, root, home, system, plugin, protected, missing, denied, not_dir, not_own, shared,
+    config.
     """
     if not _abs_path_ok(path, consts.CWD_MAX_BYTES):
         return None, "unclean"
@@ -327,6 +337,11 @@ def cwd_verdict(path):
         return real, "system"
     if _under(real, fsio.plugin_dir()) or _under(real, os.path.realpath(home + "/.config/omarchy/plugins")):
         return real, "plugin"
+    # Inside a protected folder, or above one: either way the job could write into it. The plugin
+    # folder counts wherever it really is, a linked install included.
+    for root in [os.path.realpath(home + "/" + rel) for rel in PROTECTED_CWD_REL] + [fsio.plugin_dir()]:
+        if _under(real, root) or _under(root, real):
+            return real, "protected"
     if not _abs_path_ok(real, consts.CWD_MAX_BYTES):
         return None, "unclean"
     try:
