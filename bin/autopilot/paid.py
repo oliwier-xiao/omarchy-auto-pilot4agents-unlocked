@@ -46,6 +46,7 @@ REASON_FOR_CODE = {
     "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
+    "gemini_policy": "gemini_policy",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -77,6 +78,9 @@ _TYPE_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 # Gemini sign-in types that draw on a Google account's Code Assist quota, never an API key.
 _GEMINI_FREE_TYPES = ("oauth-personal", "compute-default-credentials", "cloud-shell")
 _GEMINI_SYSTEM_DIR = "/etc/gemini-cli"
+# Gemini CLI sets every --admin-policy aside when <system dir>/policies holds a .toml file; at
+# most this many names of that folder are read before the gate gives up and refuses.
+_GEMINI_POLICIES_MAX = 4096
 _PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _BLOCK_RE = re.compile(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]{0,63})/([A-Za-z0-9][^\s/]*(?:/[^\s]+)?)[ \t]*\r?$")
 _NOT_LOGGED_IN_RE = re.compile(r"(?m)^[ \t]*Not logged in\b")
@@ -373,6 +377,37 @@ def gemini_selected_type(home, cwd=None):
         if value not in _GEMINI_FREE_TYPES:
             return value
     return found[-1] if found else None
+
+
+def gemini_policy_gate():
+    """None when a Gemini CLI job would run under the plugin's admin policy, else "gemini_policy".
+
+    The policy (harness.GEMINI_POLICY_TEXT) keeps a headless job from changing its approval mode.
+    Gemini CLI applies an --admin-policy only when /etc/gemini-cli/policies holds no .toml file
+    (it does not look further when that folder is missing or not a folder), and splits the flag's
+    value at commas; the file must be the one the plugin ships, unchanged.
+    """
+    path = harness.gemini_policy_path()
+    if "," in path:
+        return "gemini_policy"
+    try:
+        fsio.check_trusted_file(path, executable=False)
+        data = fsio.read_file_nofollow(path, len(harness.GEMINI_POLICY_TEXT.encode("utf-8")) + 1,
+                                       owner_uid_or_root=True, private=True)
+    except ApError:
+        return "gemini_policy"
+    if data != harness.GEMINI_POLICY_TEXT.encode("utf-8"):
+        return "gemini_policy"
+    try:
+        with os.scandir(os.path.join(_GEMINI_SYSTEM_DIR, "policies")) as entries:
+            for count, entry in enumerate(entries):
+                if count >= _GEMINI_POLICIES_MAX or entry.name.endswith(".toml"):
+                    return "gemini_policy"
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        return "gemini_policy"
+    return None
 
 
 def gemini_verdict(selected_type, allow_paid):
@@ -952,6 +987,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # configuration. Full access already approves every tool and trusts the folder, so nothing is left to widen.
     if code is None and harness_id == "cursor" and job.get("level") != "full":
         code = cursor_preflight(cwd, home, cursor_env(home))
+
+    # 2b. Gemini CLI: the admin policy that keeps a headless job in its approval mode must apply
+    if code is None and harness_id == "gemini":
+        code = gemini_policy_gate()
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None
