@@ -110,6 +110,15 @@ def _add_runtime(env):
         env["XDG_RUNTIME_DIR"] = runtime
 
 
+def claude_level_tools(harness_id, level_id):
+    """The tool names a Claude level offers through --tools, or None when it names none."""
+    entry = edition.level(level_id)
+    argv = entry["harness"].get(harness_id, {}).get("argv", []) if entry is not None and harness_id == "claude" else []
+    if "--tools" in argv and argv.index("--tools") + 1 < len(argv):
+        return tuple(argv[argv.index("--tools") + 1].split(","))
+    return None
+
+
 def agent_env(harness, level_id):
     """Allowlisted environment for an agent child (R0 D11, v2 section 5).
 

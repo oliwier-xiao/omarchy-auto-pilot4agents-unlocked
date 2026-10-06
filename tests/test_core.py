@@ -118,6 +118,9 @@ V2_MESSAGES = {
     "opencode_plugin_code": ("This folder, or a folder above it, has OpenCode plugin code: a .opencode/plugin "
                              "folder, or a plugin listed in an opencode.json. OpenCode runs it at startup, so no job "
                              "runs here. Keep your own plugins in ~/.config/opencode, or pick another folder."),
+    "codex_project_config": ("This folder, or a folder above it, has its own Codex settings in .codex/config.toml. "
+                             "Codex would load them, and they can start programs outside its sandbox, so no job runs "
+                             "here. Pick another folder."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -138,6 +141,7 @@ V2_REASONS = {
     "cursor_sandbox": "Cursor's sandbox could not start, so nothing ran. Turn it off in cursor-agent.",
     "gemini_policy": "Gemini CLI would not apply the policy that keeps the job in its approval mode, so nothing ran.",
     "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
+    "codex_project_config": "This folder has its own Codex settings that could reach past the sandbox, so nothing ran.",
 }
 
 
@@ -2097,7 +2101,7 @@ class V2CoreTests(Sandbox):
                   "cursor_untrusted": "target.cwd", "not_logged_in": "harness", "pi_auth_invalid": "provider",
                   "paid_blocked": "allowPaid", "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid",
                   "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness",
-                  "opencode_plugin_code": "target.cwd"}
+                  "opencode_plugin_code": "target.cwd", "codex_project_config": "target.cwd"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None

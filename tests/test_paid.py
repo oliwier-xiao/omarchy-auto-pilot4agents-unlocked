@@ -200,6 +200,41 @@ class ClaudeCodexGeminiTests(PaidCase):
             self.assertEqual(paid.codex_login_kind(text), kind, text)
         self.assertIsNone(paid.codex_login_kind(None))
 
+    def test_a_folder_with_its_own_codex_settings_is_refused(self):
+        # Codex loads .codex/config.toml from the project root down once it trusts the folder, and a
+        # workspace-write run trusts it by itself; its root is not the nearest .git either.
+        refused = lambda cwd: paid.codex_preflight(cwd, self.home) == "codex_project_config"  # noqa: E731
+        self.answer(["login", "status"], stderr="Logged in using ChatGPT\n")
+        deep = self.mkdir("proj/a/b")
+        self.assertIsNone(paid.codex_preflight(deep, self.home))
+        self.assertIsNone(self.gate(self.job("codex", target={"mode": "new", "cwd": deep, "sessionId": None,
+                                                               "sessionPath": None}))["code"])
+        for rel in ("proj/a/b/.codex/config.toml", "proj/a/.codex/config.toml", "proj/.codex/config.toml"):
+            self.write(rel, "")
+            self.assertTrue(refused(deep), rel)
+            os.remove(self.path(rel))
+        # Above a .git too, and an empty .git folder (which Codex skips) does not end the walk.
+        self.mkdir("proj/.git")
+        self.mkdir("proj/a/.git")
+        self.write("proj/.codex/config.toml", "")
+        self.assertTrue(refused(deep))
+        g = self.gate(self.job("codex", target={"mode": "new", "cwd": deep, "sessionId": None, "sessionPath": None}))
+        self.assertEqual((g["ok"], g["code"]), (False, "codex_project_config"))
+        os.remove(self.path("proj/.codex/config.toml"))
+        # A link is followed, as Codex follows it; other files under .codex, or elsewhere, do not count.
+        target = self.write("elsewhere.toml", "")
+        os.symlink(target, self.path("proj/a/.codex.toml"))
+        os.makedirs(self.path("proj/a/.codex/rules"))
+        self.write("proj/a/.codex/hooks.json", "{}")
+        self.write("proj/a/config.toml", "")
+        self.assertIsNone(paid.codex_preflight(deep, self.home))
+        os.symlink(target, self.path("proj/a/.codex/config.toml"))
+        self.assertTrue(refused(deep))
+        os.remove(self.path("proj/a/.codex/config.toml"))
+        # The home folder's .codex is the user's own Codex settings.
+        self.write(".codex/config.toml", 'model = "x"\n')
+        self.assertIsNone(paid.codex_preflight(deep, self.home))
+
     def test_codex_probe_api_key_refused_off_allowed_on(self):
         job = self.job("codex")
         self.answer(["login", "status"], stderr="Logged in using an API key\n")

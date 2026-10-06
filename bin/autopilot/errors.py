@@ -79,6 +79,9 @@ MESSAGES = {
     "opencode_plugin_code": ("This folder, or a folder above it, has OpenCode plugin code: a .opencode/plugin "
                              "folder, or a plugin listed in an opencode.json. OpenCode runs it at startup, so no job "
                              "runs here. Keep your own plugins in ~/.config/opencode, or pick another folder."),
+    "codex_project_config": ("This folder, or a folder above it, has its own Codex settings in .codex/config.toml. "
+                             "Codex would load them, and they can start programs outside its sandbox, so no job runs "
+                             "here. Pick another folder."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

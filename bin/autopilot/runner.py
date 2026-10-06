@@ -31,7 +31,7 @@ _REASON_FOR_CODE = {"paid_blocked": "paid_blocked", "paid_zen": "paid_blocked", 
                     "cursor_autorun_config": "cursor_autorun_config",
                     "cursor_network_config": "cursor_network_config",
                     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
-                    "opencode_plugin_code": "opencode_plugin_code",
+                    "opencode_plugin_code": "opencode_plugin_code", "codex_project_config": "codex_project_config",
                     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                     "gemini_policy": "gemini_policy"}
 _OBSERVED_HARNESSES = ("cursor", "opencode", "pi", "codex")
@@ -420,7 +420,8 @@ def _spawn(sd, job, gen, prompt, cli, stop_event, gate=None):
     expected = level["harness"][job["harness"]]["initPermissionMode"]
     state = classify.new_stream_state(job["harness"], expected, allow_paid=job.get("allowPaid") is True,
                                       provider=job.get("provider"), level_id=job["level"],
-                                      billing=(gate or {}).get("billing"))
+                                      billing=(gate or {}).get("billing"),
+                                      expected_tools=harness.claude_level_tools(job["harness"], job["level"]))
     state["targetSession"] = harness.effective_session(job)[1]
     state["model"] = job.get("model")
     runs = sd.subdir("runs", create=True)

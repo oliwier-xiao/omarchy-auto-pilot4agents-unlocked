@@ -34,6 +34,15 @@ HARNESS_IDS = ("claude", "opencode", "codex", "cursor", "pi", "gemini")
 # durable auto-memory or scheduled-task file that a later run would reload.
 _CLAUDE_ISOLATION = ("--setting-sources", "user", "--strict-mcp-config")
 _CLAUDE_ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CRON": "1"}
+# Plan and Unattended name the only tools Claude may offer. Otherwise Plan hands shell, web and
+# subagent calls to Claude's own auto-mode classifier, which can approve them, and tools such as
+# EnterWorktree, RemoteTrigger and CronCreate need no permission at all. Unattended keeps every tool a
+# user's own allow rules can open, but may not write Claude's own settings or memory, here or in the
+# working folder, which Write and Edit can otherwise do with no rule. The runner checks that the
+# tools Claude reports at start are among these (runner._spawn).
+CLAUDE_PLAN_TOOLS = "Glob,Grep,Read"
+CLAUDE_UNATTENDED_TOOLS = "Bash,Edit,Glob,Grep,NotebookEdit,Read,WebFetch,WebSearch,Write"
+_CLAUDE_CONFIG_WRITES = "Write(~/.claude/**),Edit(~/.claude/**),Write(.claude/**),Edit(.claude/**)"
 
 
 _OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
@@ -64,7 +73,8 @@ LEVELS = (
         "harness": {
             "claude": {
                 "caption": "Plan mode. Claude reads and proposes a plan. It does not edit files or run commands.",
-                "argv": ["--permission-mode", "plan", "--permission-prompts", "none"] + list(_CLAUDE_ISOLATION),
+                "argv": (["--permission-mode", "plan", "--permission-prompts", "none", "--tools", CLAUDE_PLAN_TOOLS]
+                         + list(_CLAUDE_ISOLATION)),
                 "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "plan",
             },
@@ -114,7 +124,8 @@ LEVELS = (
         "harness": {
             "claude": {
                 "caption": "Only what your own Claude permission rules already allow. Anything that would ask is denied.",
-                "argv": ["--permission-mode", "dontAsk", "--permission-prompts", "none"] + list(_CLAUDE_ISOLATION),
+                "argv": (["--permission-mode", "dontAsk", "--permission-prompts", "none", "--tools", CLAUDE_UNATTENDED_TOOLS,
+                          "--disallowedTools", _CLAUDE_CONFIG_WRITES] + list(_CLAUDE_ISOLATION)),
                 "env": dict(_CLAUDE_ISOLATION_ENV),
                 "initPermissionMode": "dontAsk",
             },

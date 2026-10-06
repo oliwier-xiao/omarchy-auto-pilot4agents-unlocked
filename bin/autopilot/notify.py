@@ -75,6 +75,7 @@ REASON_SENTENCES = {
     "quota_final": "The provider reports no quota or balance left, so it does not retry.",
     "gemini_policy": "Gemini CLI would not apply the policy that keeps the job in its approval mode, so nothing ran.",
     "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
+    "codex_project_config": "This folder has its own Codex settings that could reach past the sandbox, so nothing ran.",
 }
 
 SUCCESS_EVENTS = ("done", "deferred", "limit_rearmed", "transient_rearmed", "busy_deferred")

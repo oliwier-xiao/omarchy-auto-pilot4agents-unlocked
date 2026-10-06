@@ -394,6 +394,10 @@ VALUE_FLAGS = {
     "cursor": ("--output-format", "--mode", "--sandbox", "--workspace", "--model", "--resume"),
     "pi": ("--mode", "--tools", "--provider", "--model", "--session-id", "--name", "--session", "--fork"),
 }
+# The only tools a Claude level may name: Plan reads, Unattended also the tools a user's own allow rules
+# can open. Anything permission-free (subagents, worktrees, triggers) stays out at both.
+CLAUDE_TOOLS = {"plan": ("Glob", "Grep", "Read"),
+                "unattended": ("Bash", "Edit", "Glob", "Grep", "NotebookEdit", "Read", "WebFetch", "WebSearch", "Write")}
 
 
 def argv_shape_problems(label, harness, exec_len, argv, env):
@@ -408,6 +412,8 @@ def argv_shape_problems(label, harness, exec_len, argv, env):
     if unlocked:
         forbidden = tuple(w for w in forbidden if w not in UNLOCKED_CURSOR_FLAGS)
     tools = consts.PI_TOOLS + (UNLOCKED_PI_TOOLS if unlocked else ())
+    if harness == "claude":
+        tools = CLAUDE_TOOLS.get(label.split("/")[0], ())
     for word in words:
         if word in FORBIDDEN_ANY or word in forbidden:
             problems.append("build_command %s: forbidden argument %s" % (label, word))

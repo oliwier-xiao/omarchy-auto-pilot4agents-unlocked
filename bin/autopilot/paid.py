@@ -47,6 +47,7 @@ REASON_FOR_CODE = {
     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
+    "codex_project_config": "codex_project_config",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -651,6 +652,28 @@ def opencode_preflight(cwd, home):
     return None
 
 
+def codex_preflight(cwd, home):
+    """First Codex refusal for a working folder, or None.
+
+    Once Codex trusts a folder it loads `.codex/config.toml` from every folder between the project
+    root and the working folder, and that config can start MCP servers outside the sandbox or have
+    a reviewer lift it. A workspace-write run trusts a new folder by itself, and the trust stays for
+    every later run there, Plan included; and the project root is not simply the nearest `.git`
+    (an empty `.git` folder does not count, and user settings can name other markers). So a folder
+    with `.codex/config.toml` in it or in any folder above it, up to /, is refused. The home
+    folder's `.codex` is the user's own Codex settings and is skipped. Stat only; nothing is opened.
+    """
+    path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
+    home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
+    if path is None or home_path is None:
+        return "codex_project_config"
+    home_real = os.path.realpath(home_path)
+    for folder in _walk_to_fs_root(os.path.realpath(path)):
+        if folder != home_real and os.path.exists(os.path.join(folder, ".codex", "config.toml")):
+            return "codex_project_config"
+    return None
+
+
 def opencode_verbose(exec_prefix, provider, deadline_s):
     """parse_verbose_blocks of `opencode models <provider> --verbose` (20 s, 1 MiB), or None."""
     if provider not in ("opencode", "opencode-go") or not _exec_ok(exec_prefix):
@@ -1094,6 +1117,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2c. OpenCode: plugin code in or above the working folder runs at start, before any level
     if code is None and harness_id == "opencode":
         code = opencode_preflight(cwd, home)
+
+    # 2d. Codex: a folder's own .codex/config.toml loads once Codex trusts the folder, past any level
+    if code is None and harness_id == "codex":
+        code = codex_preflight(cwd, home)
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None

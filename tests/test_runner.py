@@ -381,6 +381,7 @@ class HarnessTests(Sandbox):
         cmd = harness.build_command(literal, exec_prefix=["/opt/claude"], run_dir="/s/runs", gen=3)
         self.assertEqual(cmd["argv"], ["/opt/claude", "-p", "--output-format", "stream-json", "--verbose",
                                        "--permission-mode", "plan", "--permission-prompts", "none",
+                                       "--tools", "Glob,Grep,Read",
                                        "--setting-sources", "user", "--strict-mcp-config",
                                        "--max-turns", "15",
                                        "--resume", "3f2a0c19-0000-4000-8000-000000000001"])
@@ -663,7 +664,7 @@ class SuperviseBase(Sandbox):
         cmd = harness.build_command(job, exec_prefix=found["exec"], run_dir=runs, gen=1)
         expected = edition.level(level)["harness"][name]["initPermissionMode"]
         state = classify.new_stream_state(name, expected, allow_paid=allow_paid, provider=job["provider"],
-                                          level_id=level)
+                                          level_id=level, expected_tools=harness.claude_level_tools(name, level))
         state["model"] = job["model"]
         log_path = os.path.join(runs, "run.log")
         if os.path.exists(log_path):
@@ -709,6 +710,8 @@ class SuperviseTests(SuperviseBase):
             ("claude", "not_found", "plan", "not_found"), ("claude", "max_turns", "unattended", "max_turns"),
             ("claude", "transient", "plan", "transient"),
             ("claude", "wrong_init_mode", "unattended", "boundary_mismatch"),
+            ("claude", "wrong_init_tools", "plan", "boundary_mismatch"),
+            ("claude", "wrong_init_tools", "unattended", "boundary_mismatch"),
             ("codex", "done", "plan", "done"), ("codex", "not_found", "plan", "not_found"),
             ("codex", "auth", "plan", "auth"), ("codex", "limit_banner", "unattended", "limit"),
             ("codex", "transient", "plan", "transient"), ("codex", "codex_untrusted", "plan", "untrusted"),
@@ -749,6 +752,14 @@ class SuperviseTests(SuperviseBase):
         result = classify.classify(out["state"], out["run"], level_id="plan")
         self.assertEqual(result["outcome"], "boundary_mismatch")
         self.assertEqual(out["state"]["initMode"], "default")
+
+    def test_init_tools_mismatch_kill(self):
+        # Claude ignores a --tools name it does not know, so the tools it reports at start are checked.
+        out = self.run_stub("claude", "wrong_init_tools")
+        self.assertEqual(out["run"]["killedBy"], "boundary")
+        self.assertEqual(out["state"]["killDetail"], "init_tools")
+        self.assertLess(out["elapsed"], 10)
+        self.assertEqual(classify.classify(out["state"], out["run"], level_id="plan")["outcome"], "boundary_mismatch")
 
     def test_output_flood_capped(self):
         out = self.run_stub("claude", "flood")
@@ -2003,6 +2014,26 @@ class V2StreamTests(SuperviseBase):
             _state, answers = sfeed("claude", [line], allow_paid=allow)
             self.assertEqual(answers, [answer], (source, allow))
 
+    def test_claude_init_tools_checked_against_the_level(self):
+        # --tools drops a name Claude does not know without a word, so the init list is checked.
+        plan = harness.claude_level_tools("claude", "plan")
+        self.assertEqual(sorted(plan), ["Glob", "Grep", "Read"])
+        self.assertIn("Write", harness.claude_level_tools("claude", "unattended"))
+        init = {"type": "system", "subtype": "init", "session_id": PI_UUID, "permissionMode": "plan",
+                "apiKeySource": "none", "mcp_servers": []}
+        for extra, answer in (({"tools": ["Read", "Grep", "Glob"]}, None), ({"tools": ["Read"]}, None),
+                              ({"tools": []}, None), ({"tools": ["Read", "Bash"]}, "kill"),
+                              ({"tools": ["Read", "mcp__x__y"]}, "kill"), ({"tools": "Read"}, "kill"),
+                              ({"tools": None}, "kill"), ({"tools": ["Read"], "mcp_servers": None}, "kill"),
+                              ({"tools": ["Read"], "mcp_servers": [{"name": "x"}]}, "kill")):
+            state, answers = sfeed("claude", [dict(init, **extra)], expected_tools=plan)
+            self.assertEqual(answers, [answer], extra)
+            self.assertEqual(state["killDetail"], "init_tools" if answer else None, extra)
+        # A level that names no tools is not checked.
+        self.assertIsNone(harness.claude_level_tools("codex", "plan"))
+        _state, answers = sfeed("claude", [dict(init, tools=["Agent"])], expected_tools=None)
+        self.assertEqual(answers, [None])
+
     def test_claude_overage_kill_rearm_off_allowed_on(self):
         resets = int(time.time()) + 5400
         out = self.run_stub("claude", "claude_overage_event", resetsAt=resets)
@@ -2600,7 +2631,8 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
-                 "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code"}
+                 "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
+                 "codex_project_config": "codex_project_config"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")
