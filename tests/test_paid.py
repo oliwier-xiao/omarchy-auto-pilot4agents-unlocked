@@ -717,6 +717,11 @@ class CursorTests(PaidCase):
         for broken in ("{broken", " " * (256 * 1024 + 1)):
             self.write(config, broken)
             self.assertEqual(paid.cursor_preflight(self.work, self.home, self.env), "cursor_autorun_config")
+        # ~/.cursor still counts when this environment selects $XDG_CONFIG_HOME/cursor.
+        self.write(config, {"approvalMode": "allowlist"})
+        self.assertEqual(paid.cursor_preflight(self.work, self.home, self.env), "cursor_autorun_config")
+        os.remove(self.path(".cursor/cli-config.json"))
+        self.assertIsNone(paid.cursor_preflight(self.work, self.home, self.env))
 
     def test_cursor_project_rules_walk_and_claude_allow(self):
         self.mkdir("code/repo/.git")
@@ -836,8 +841,10 @@ class CursorTests(PaidCase):
         verdict = paid.cursor_preflight(work, self.home, self.env)
         setattr(os, "open", real_open)
         self.assertIsNone(verdict)
+        # Both of Cursor's config folders are read: $XDG_CONFIG_HOME/cursor here, and ~/.cursor (absent).
         self.assertEqual(sorted(opened),
-                         sorted([config, os.path.realpath(settings), os.path.realpath(settings_local)]))
+                         sorted([config, self.path(".cursor/cli-config.json"), os.path.realpath(settings),
+                                 os.path.realpath(settings_local)]))
 
 
 # --- pre-fire defer ------------------------------------------------------------------------

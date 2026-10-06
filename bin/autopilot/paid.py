@@ -847,21 +847,27 @@ def claude_project_allow_nonempty(obj):
 def cursor_preflight(cwd, home, env):
     """First Cursor preflight refusal for a working folder, or None (table 6.2).
 
-    Reads only <config>/cli-config.json and <repository root>/.claude/settings.json; everything
-    else is a stat. A config file that exists but cannot be read or parsed refuses, because what
-    it would allow cannot be known.
+    Reads only cli-config.json in Cursor's config folders and the repository root's .claude
+    settings; everything else is a stat. A config file that exists but cannot be read or parsed
+    refuses, because what it would allow cannot be known.
     """
     workspace = _clean_abs(cwd, consts.CWD_MAX_BYTES)
     home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
     if workspace is None or home_path is None:
         return "cursor_project_rules"
-    config_path = os.path.join(cursor_config_dir(env), "cli-config.json")
-    obj, refused = _read_config(config_path, _CONFIG_CAP)
-    if refused or (obj is None and os.path.lexists(config_path)):
-        return "cursor_autorun_config"
-    verdict = cursor_cli_config_verdict(obj)
-    if verdict is not None:
-        return verdict
+    # Both places Cursor keeps cli-config.json are checked, $XDG_CONFIG_HOME/cursor and
+    # ~/.cursor, so a setting in the one this run might not have been expected to read still counts.
+    config_paths = [os.path.join(cursor_config_dir(env), "cli-config.json")]
+    legacy = os.path.join(home_path, ".cursor", "cli-config.json")
+    if legacy not in config_paths:
+        config_paths.append(legacy)
+    for config_path in config_paths:
+        obj, refused = _read_config(config_path, _CONFIG_CAP)
+        if refused or (obj is None and os.path.lexists(config_path)):
+            return "cursor_autorun_config"
+        verdict = cursor_cli_config_verdict(obj)
+        if verdict is not None:
+            return verdict
 
     real = os.path.realpath(workspace)
     home_real = os.path.realpath(home_path)
