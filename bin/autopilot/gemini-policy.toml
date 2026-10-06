@@ -1,0 +1,11 @@
+# This plugin passes this file to every Gemini CLI job as --admin-policy, the policy tier that
+# outranks every other. A job runs with nobody there to answer, and Gemini CLI run headless
+# lets the model leave Plan mode on its own (exit_plan_mode) into approving every tool without
+# asking, or enter Plan mode from Default approval to do the same (enter_plan_mode). So a job may
+# not change its approval mode at all. The helper refuses to start Gemini CLI when this file does
+# not read exactly as harness.GEMINI_POLICY_TEXT.
+[[rule]]
+toolName = ["enter_plan_mode", "exit_plan_mode"]
+decision = "deny"
+priority = 999
+denyMessage = "This job runs unattended, so its approval mode cannot change."

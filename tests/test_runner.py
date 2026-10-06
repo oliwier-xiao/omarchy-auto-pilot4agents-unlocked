@@ -362,6 +362,7 @@ def expected_argv(job, exec_prefix, run_dir, gen):
         argv += {"resume": ["resume", s, "-"], "fork": ["fork", t["sessionId"], "-"], "new": ["-"]}[mode]
     else:
         argv = exec_prefix + ["-p", "", "-o", "json"] + lv
+        argv += ["--admin-policy", os.path.join(fsio.plugin_dir(), "bin/autopilot/gemini-policy.toml")]
         argv += ["-m", model] if model else []
         argv += {"resume": ["--resume", s], "new": ["--session-id", t["newSessionId"]]}[mode]
     return argv
@@ -389,7 +390,9 @@ class HarnessTests(Sandbox):
                            new_session="11111111-2222-4333-8444-555555555555")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/node", "/b/gemini.js"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/usr/bin/node", "/b/gemini.js", "-p", "", "-o", "json", "--approval-mode",
-                                       "default", "--session-id", "11111111-2222-4333-8444-555555555555"])
+                                       "default", "--admin-policy", harness.gemini_policy_path(),
+                                       "--session-id", "11111111-2222-4333-8444-555555555555"])
+        self.assertEqual(harness.gemini_policy_path(), os.path.join(fsio.plugin_dir(), "bin/autopilot/gemini-policy.toml"))
         literal = make_job("opencode", level="plan", mode="fork", job_id="0123456789abcdef",
                            session="ses_abcdefgh12345678", model="anthropic/claude-opus-5")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/opencode"], run_dir="/s", gen=1)
@@ -2584,7 +2587,8 @@ class V2RunVerbTests(RunVerbBase):
                  "paid_pi_claude": "paid_blocked", "paid_pi_key": "paid_blocked",
                  "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
-                 "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed"}
+                 "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
+                 "gemini_policy": "gemini_policy"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")

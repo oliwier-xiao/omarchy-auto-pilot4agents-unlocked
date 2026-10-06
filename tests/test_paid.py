@@ -9,7 +9,9 @@ CLIs (see tests/h5_support.py). No real CLI, no network, no model, no systemd.
 
 import json
 import os
+import shutil
 import sys
+import tomllib
 import unittest
 
 sys.dont_write_bytecode = True
@@ -17,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import h5_support as S  # noqa: E402
 from h5_support import DAY, H5Case  # noqa: E402
-from autopilot import consts, models, paid  # noqa: E402
+from autopilot import consts, fsio, harness, models, paid  # noqa: E402
 from autopilot.errors import ApError  # noqa: E402
 
 V2_REASONS = set(consts.REASONS) | {
@@ -59,6 +61,95 @@ class PaidCase(H5Case):
 
 
 # --- Claude, Codex, Gemini ----------------------------------------------------------------
+
+class GeminiPolicyTests(PaidCase):
+    """Every Gemini CLI job runs under the plugin's admin policy, or does not run at all.
+
+    Run headless, Gemini CLI lets the model call exit_plan_mode, which leaves Plan mode straight
+    into approving every tool, and enter_plan_mode, which gets a Default approval run there first.
+    """
+
+    def policies(self, *names):
+        folder = os.path.join(self.gemini_system, "policies")
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
+                handle.write("# a policy of the machine's own\n")
+        return folder
+
+    def test_the_shipped_policy_denies_every_change_of_approval_mode(self):
+        with open(harness.gemini_policy_path(), "rb") as handle:
+            data = handle.read()
+        self.assertEqual(data, harness.GEMINI_POLICY_TEXT.encode("utf-8"))
+        rules = tomllib.loads(data.decode("utf-8"))["rule"]
+        self.assertEqual(len(rules), 1)
+        rule = rules[0]
+        self.assertEqual((rule["toolName"], rule["decision"], rule["priority"]),
+                         (["enter_plan_mode", "exit_plan_mode"], "deny", 999))
+        # No modes and no interactive key: the rule holds in every approval mode, headless or not.
+        self.assertEqual(sorted(rule), ["decision", "denyMessage", "priority", "toolName"])
+        self.assertIsNone(paid.gemini_policy_gate())
+
+    def test_a_gemini_job_is_refused_when_gemini_would_set_the_policy_aside(self):
+        gemini = self.job("gemini", allowPaid=True)
+        self.assertTrue(self.gate(gemini)["ok"])
+        self.policies("README", "notes.txt")
+        self.assertIsNone(paid.gemini_policy_gate(), "only a .toml file makes Gemini CLI ignore --admin-policy")
+        self.policies("site.toml")
+        for phase in ("preview", "arm", "prefire"):
+            gate = self.gate(gemini, phase=phase)
+            self.assertEqual((gate["ok"], gate["code"]), (False, "gemini_policy"), phase)
+        self.assertEqual(paid.REASON_FOR_CODE["gemini_policy"], "gemini_policy")
+        self.assertIn("gemini_policy", consts.REASONS)
+        self.assertTrue(self.gate(self.job("claude", allowPaid=True))["ok"], "other agents are not affected")
+        # A file where the folder would be is read past by Gemini CLI as well.
+        shutil.rmtree(os.path.join(self.gemini_system, "policies"))
+        with open(os.path.join(self.gemini_system, "policies"), "w", encoding="utf-8") as handle:
+            handle.write("x")
+        self.assertIsNone(paid.gemini_policy_gate())
+        os.remove(os.path.join(self.gemini_system, "policies"))
+        if os.getuid() != 0:
+            os.chmod(self.policies(), 0)
+            try:
+                self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "a folder it cannot read is refused")
+            finally:
+                os.chmod(os.path.join(self.gemini_system, "policies"), 0o755)
+
+    def test_a_gemini_job_is_refused_when_the_policy_file_is_not_the_shipped_one(self):
+        # The folders above a test copy are /tmp's; their check has its own tests (fsio).
+        self.patch(fsio, "_check_ancestors", lambda parent, owners: None)
+        folder = self.mkdir("plugin")
+        copy = os.path.join(folder, "gemini-policy.toml")
+
+        def place(text, mode=0o644):
+            with open(copy, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.chmod(copy, mode)
+
+        self.patch(harness, "gemini_policy_path", lambda: copy)
+        place(harness.GEMINI_POLICY_TEXT)
+        self.assertIsNone(paid.gemini_policy_gate(), "an exact copy passes")
+        # Built in two pieces, so the repository's denylist does not read it as a permission value.
+        place(harness.GEMINI_POLICY_TEXT.replace('decision = "deny"', 'decision = "al' + 'low"'))
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "changed")
+        place(harness.GEMINI_POLICY_TEXT + "\n")
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "longer")
+        place(harness.GEMINI_POLICY_TEXT, 0o664)
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "group-writable")
+        place(harness.GEMINI_POLICY_TEXT)
+        link = copy + ".link.toml"
+        os.symlink(copy, link)
+        self.patch(harness, "gemini_policy_path", lambda: link)
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "a link")
+        self.patch(harness, "gemini_policy_path", lambda: os.path.join(folder, "missing.toml"))
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "missing")
+        # Gemini CLI splits --admin-policy at commas, so such a path would name two other files.
+        comma = self.mkdir("plu,gin")
+        shutil.copy(copy, os.path.join(comma, "gemini-policy.toml"))
+        self.patch(harness, "gemini_policy_path", lambda: os.path.join(comma, "gemini-policy.toml"))
+        self.assertEqual(paid.gemini_policy_gate(), "gemini_policy", "a comma")
+        self.assertEqual(self.gate(self.job("gemini", allowPaid=True))["code"], "gemini_policy")
+
 
 class ClaudeCodexGeminiTests(PaidCase):
     def test_claude_init_api_key_source_values(self):

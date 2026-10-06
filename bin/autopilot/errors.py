@@ -71,6 +71,9 @@ MESSAGES = {
     "cursor_autorun_config": "Cursor is set to Run Everything, which would approve every tool.",
     "cursor_network_config": "Cursor's sandbox allows all network access.",
     "cursor_project_rules": "This folder has its own Cursor or Claude allow rules, which Cursor would apply.",
+    "gemini_policy": ("Gemini CLI would not apply the policy that keeps a job in its approval mode: "
+                      "/etc/gemini-cli/policies has policies of its own, or the plugin's policy file failed "
+                      "a check."),
     "cursor_untrusted": ("Cursor does not trust this folder yet. Open cursor-agent in this folder once and choose "
                          "Trust this workspace."),
 }
