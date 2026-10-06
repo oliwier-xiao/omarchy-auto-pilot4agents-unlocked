@@ -13,7 +13,9 @@ With allowPaid off a job may only draw on the user's plan (CONTRACT-V2-DELTA sec
   cursor    config preflights in every state (auto-run config, open network, repository allow
             rules, workspace trust); on-demand spend is invisible, so a full Included window defers
   pi        `pi auth check --provider P --json --no-refresh`; API keys, OpenRouter, Radius and
-            Claude through extra usage are refused
+            Claude through extra usage are refused. Right before an Auto job starts in the OS sandbox,
+            the same check runs without --no-refresh, so an expired sign-in is renewed and written
+            back here, outside the sandbox, where ~/.pi/agent stays read-only
 
 Everything read here is a config file (bounded, no-follow, owner-checked), a stat, or a probe
 answer (bounded child, allowlisted environment, no prompt, only parsed values kept). Credential
@@ -26,7 +28,7 @@ import os
 import re
 import stat
 
-from . import bounded, consts, fsio, h5_v2, harness, identity
+from . import bounded, confine, consts, fsio, h5_v2, harness, identity
 from . import usage as usage_mod
 from .errors import ApError
 
@@ -48,6 +50,7 @@ REASON_FOR_CODE = {
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
     "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
+    "sandbox_unavailable": "sandbox_unavailable",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -817,18 +820,22 @@ def pi_auth_parse(rc, stdout):
     return garbage
 
 
-def pi_auth_probe(exec_prefix, provider, deadline_s):
+def pi_auth_probe(exec_prefix, provider, deadline_s, refresh=False):
     """pi_auth_parse of `<pi> auth check --provider P --json --no-refresh` (10 s, 4 KiB).
 
     The result also carries "timedOut" (the probe could not finish in time). A ready answer for
-    a different provider than the one asked for is garbage.
+    a different provider than the one asked for is garbage. With refresh, --no-refresh is left
+    out, so Pi renews an expired OAuth sign-in and writes it back: used only right before a run
+    in the OS sandbox, where Pi could renew it but not keep it (a provider that rotates its
+    refresh token would then lose the sign-in), and where it may not write ~/.pi/agent because
+    Pi runs a key written as !command.
     """
     garbage = {"status": "garbage", "provider": None, "authType": None, "timedOut": False}
     if not h5_v2.pi_provider_ok(provider) or not _exec_ok(exec_prefix):
         return garbage
     limit = min(_PI_AUTH_DEADLINE_S, _left(deadline_s))
-    result = _run(list(exec_prefix) + ["auth", "check", "--provider", provider, "--json", "--no-refresh"],
-                  "pi", limit, _PROBE_CAP)
+    argv = ["auth", "check", "--provider", provider, "--json"] + ([] if refresh else ["--no-refresh"])
+    result = _run(list(exec_prefix) + argv, "pi", limit, _PROBE_CAP)
     if result is None:
         return dict(garbage, timedOut=True)
     if result.get("overflow"):
@@ -1203,6 +1210,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     if code is None and harness_id == "codex":
         code = codex_preflight(cwd, home)
 
+    # 2e. Auto with the shell on is confined by the OS sandbox; refuse it when the kernel cannot confine.
+    if code is None and harness.sandbox_wanted(harness_id, job.get("level")) and not confine.available():
+        code = "sandbox_unavailable"
+
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None
     if code is None and harness_id == "codex":
@@ -1226,7 +1237,8 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
             else:
                 code = "pi_auth_invalid"
         else:
-            parsed = pi_auth_probe(exec_prefix, provider, deadline_s)
+            refresh = phase == "prefire" and harness.sandbox_wanted("pi", job.get("level"))
+            parsed = pi_auth_probe(exec_prefix, provider, deadline_s, refresh=refresh)
             if parsed.get("timedOut") and phase == "preview":
                 pending = True
             else:

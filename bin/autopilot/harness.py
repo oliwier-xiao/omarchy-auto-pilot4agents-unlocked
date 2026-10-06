@@ -82,8 +82,8 @@ GEMINI_POLICY_TEXT = (
     'priority = 600\n'
     'modes = ["default"]\n'
     '\n'
-    '# Auto (autoEdit mode) adds file edits and web_fetch, never the shell, nor an edit to Gemini CLI\'s own\n'
-    '# settings or to a .env file.\n'
+    '# Auto (autoEdit mode) adds file edits, web_fetch and the shell, confined to the working folder by the OS\n'
+    '# sandbox; an edit to Gemini CLI\'s own settings or to a .env file stays denied.\n'
     '[[rule]]\n'
     'toolName = "*"\n'
     'decision = "deny"\n'
@@ -92,7 +92,7 @@ GEMINI_POLICY_TEXT = (
     'denyMessage = "This tool is not available at this level."\n'
     '\n'
     '[[rule]]\n'
-    'toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task", "write_file", "replace", "web_fetch"]\n'
+    'toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task", "write_file", "replace", "web_fetch", "run_shell_command"]\n'
     'decision = "al' 'low"\n'
     'priority = 600\n'
     'modes = ["autoEdit"]\n'
@@ -103,13 +103,6 @@ GEMINI_POLICY_TEXT = (
     'decision = "al' 'low"\n'
     'priority = 600\n'
     'modes = ["autoEdit"]\n'
-    '\n'
-    '[[rule]]\n'
-    'toolName = "run_shell_command"\n'
-    'decision = "deny"\n'
-    'priority = 700\n'
-    'modes = ["autoEdit"]\n'
-    'denyMessage = "Shell commands are not allowed at this level."\n'
     '\n'
     '[[rule]]\n'
     'toolName = ["write_file", "replace"]\n'
@@ -495,7 +488,107 @@ def _build(job, exec_prefix, run_dir, gen_text, preview=False):
 
     env = agent_env(harness, job["level"])
     env.update(pi_env)
-    return {"argv": argv, "env": env, "cwd": cwd, "levelSlot": slot, "mode": mode}
+    spec = sandbox_spec(harness, job["level"], cwd, env, exec_prefix, run_dir)
+    if spec is not None:
+        env.update(spec["env"])
+    return {"argv": argv, "env": env, "cwd": cwd, "levelSlot": slot, "mode": mode, "confine": spec}
+
+
+# --- Auto-level OS confinement (Unlocked) ------------------------------------------------------
+
+# At Auto the shell is on, so the agent process is confined with Landlock and a seccomp filter
+# (see confine.py). Only these agents are sandboxed at Auto: Codex has its own sandbox and Claude
+# its classifier, and Full is unrestricted by design.
+SANDBOX_AGENTS = ("opencode", "gemini", "pi")
+SANDBOX_LEVEL = "auto"
+# Read-only for every sandboxed run: the system, and the folders agents and toolchains live in.
+# A missing one is skipped. Nothing under the home folder is readable unless named below, so a
+# secret folder (~/.ssh, ~/.gnupg, another tool's token) is never granted.
+_SANDBOX_SYS_RO = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/lib32", "/libx32", "/opt",
+                   "/etc", "/proc", "/run", "/dev")
+# The device nodes a shell and its tools write to (RO /dev would break bash and git).
+_SANDBOX_DEV_FILES = ("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty")
+
+
+def _xdg_dir(env, key, rel, home):
+    value = _clean_abs(env.get(key, ""))
+    return value if value is not None else os.path.join(home, rel)
+
+
+def sandbox_wanted(harness, level_id):
+    """True when a run of this agent at this level is confined (Unlocked Auto, OS sandbox agents)."""
+    return level_id == SANDBOX_LEVEL and harness in SANDBOX_AGENTS
+
+
+def sandbox_spec(harness, level_id, cwd, env, exec_prefix, run_dir):
+    """The confinement spec for one run, or None when the run is not sandboxed.
+
+    Paths are real paths (a granted root is never a symlink into a denied tree). The agent may write
+    its working folder, a private per-job tmp and its own data/session folder; it reads the system
+    and its own config but not the rest of the home folder; its config stays read-only so it cannot
+    plant something a later run would load. See confine.py for the mechanism.
+    """
+    if not sandbox_wanted(harness, level_id):
+        return None
+    home = os.path.realpath(fsio.home())
+    work = os.path.realpath(cwd)
+    sbx = os.path.join(run_dir, "sbx")
+    ro = list(_SANDBOX_SYS_RO)
+    for part in exec_prefix:
+        folder = os.path.realpath(os.path.dirname(part))
+        if folder and folder not in ro:
+            ro.append(folder)
+    rw = [work, sbx]
+    mkdir = []
+    rw_files = list(_SANDBOX_DEV_FILES)
+    predirs = [sbx]
+    extra_env = {"TMPDIR": sbx, "npm_config_cache": os.path.join(sbx, "npm")}
+    config = _xdg_dir(env, "XDG_CONFIG_HOME", ".config", home)
+    data = _xdg_dir(env, "XDG_DATA_HOME", ".local/share", home)
+    state = _xdg_dir(env, "XDG_STATE_HOME", ".local/state", home)
+    cache = _xdg_dir(env, "XDG_CACHE_HOME", ".cache", home)
+    if harness == "opencode":
+        app = os.path.join(data, "opencode")
+        locks = os.path.join(state, "opencode", "locks")
+        claude_compat = os.path.join(sbx, "claude")
+        # OpenCode's config, cache (which holds the plugins' own code) and state stay read-only; only
+        # the lock files it makes under state are written. oh-my-openagent reads its settings from
+        # ~/.omo and keeps Claude Code transcripts under CLAUDE_CONFIG_DIR, pointed here at the run's
+        # private folder so ~/.claude, and the Claude sign-in in it, stay closed.
+        rw += [app, locks]
+        ro += [os.path.join(config, "opencode"), os.path.join(cache, "opencode"), os.path.join(state, "opencode"),
+               os.path.join(home, ".omo")]
+        predirs += [app, os.path.join(state, "opencode"), locks, os.path.join(cache, "opencode", "bin"),
+                    os.path.join(sbx, "opencode"), claude_compat]
+        extra_env["CLAUDE_CONFIG_DIR"] = claude_compat
+    elif harness == "gemini":
+        # SANDBOX=sandbox-exec keeps all of Gemini CLI's runtime state under the cache, so ~/.gemini
+        # (settings, policies, extensions, the sign-in) stays read-only. A sign-in refresh cannot be
+        # written back, so it simply runs again next job; the run itself still reads the sign-in.
+        runtime = os.path.join(cache, ".gemini")
+        rw.append(runtime)
+        ro.append(os.path.join(home, ".gemini"))
+        predirs.append(runtime)
+        extra_env["SANDBOX"] = "sandbox-exec"
+        if gemini_policy_wanted(level_id):
+            # The plugin's own admin policy, and nothing else of the plugin: Gemini CLI reads it at
+            # start, and without it the run stops (classify: policy_error) rather than go on unheld.
+            ro.append(os.path.realpath(gemini_policy_path()))
+    elif harness == "pi":
+        # Pi's config folder is read-only except that proper-lockfile needs to make lock folders in
+        # it; the session folder (set in the env) is writable. auth.json must stay read-only: Pi runs
+        # a key written as !command, so a run that could write it would run a command of its choice
+        # the next time Pi starts outside the sandbox. An expired sign-in is renewed before the run,
+        # outside the sandbox (paid.pi_auth_probe with refresh, at pre-fire).
+        agent = os.path.join(home, ".pi", "agent")
+        ro.append(os.path.join(home, ".pi"))
+        mkdir.append(agent)
+        session = _clean_abs(env.get("PI_CODING_AGENT_SESSION_DIR", ""))
+        if session is not None:
+            session = os.path.realpath(session)
+            rw.append(session)
+            predirs.append(session)
+    return {"rw": rw, "ro": ro, "mkdir": mkdir, "rwFiles": rw_files, "preDirs": predirs, "env": extra_env}
 
 
 def build_command(job, *, exec_prefix, run_dir, gen):
@@ -505,7 +598,8 @@ def build_command(job, *, exec_prefix, run_dir, gen):
     if _clean_abs(run_dir) is None:
         raise ApError("state_refused")
     built = _build(job, exec_prefix, run_dir, str(gen))
-    return {"argv": built["argv"], "env": built["env"], "cwd": built["cwd"], "levelSlot": built["levelSlot"]}
+    return {"argv": built["argv"], "env": built["env"], "cwd": built["cwd"], "levelSlot": built["levelSlot"],
+            "confine": built.get("confine")}
 
 
 def display_argv(harness, argv, exec_len):

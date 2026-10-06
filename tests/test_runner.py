@@ -2213,10 +2213,10 @@ class V2StreamTests(SuperviseBase):
         tools = [{"type": "tool_execution_start", "toolName": name} for name in ("read", "grep", "find", "ls", "bash")]
         _state, answers = sfeed("pi", [header] + tools, provider="openai-codex")
         self.assertEqual(answers, [None, None, None, None, None, "kill"])
-        # Each level's own --tools list decides: Auto adds edit and write, Full access adds bash.
+        # Each level's own --tools list decides: Auto and Full access add edit, write and bash.
         edits = [{"type": "tool_execution_start", "toolName": name} for name in ("edit", "write", "bash")]
         _state, answers = sfeed("pi", [header] + edits, provider="openai-codex", level_id="auto")
-        self.assertEqual(answers, [None, None, None, "kill"])
+        self.assertEqual(answers, [None, None, None, None])
         _state, answers = sfeed("pi", [header] + edits, provider="openai-codex", level_id="full")
         self.assertEqual(answers, [None, None, None, None])
         _state, answers = sfeed("pi", [header] + edits[:1], provider="openai-codex", level_id="unattended")
@@ -2639,7 +2639,8 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
-                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config"}
+                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
+                 "sandbox_unavailable": "sandbox_unavailable"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")
@@ -2797,6 +2798,84 @@ class V2RunVerbTests(RunVerbBase):
         job = self.seed(name="opencode", mode="new", level="unattended", model="opencode-go/glm-5.2")
         self.assertEqual(self.run_verb(job["id"]), ["FIRED", "OUTCOME_LIMIT", "REARMED"])
         self.assertEqual(self.observed[-1][:2], ("opencode-go", "weekly"))
+
+
+class SandboxSpecTests(unittest.TestCase):
+    """build_command attaches an OS-confinement spec at Auto for the sandboxed agents, and the job's
+    folder appears in that spec, never on the agent's command line or in its environment."""
+
+    def build(self, name, level, **extra):
+        prefix = ["/usr/bin/node", "/b/gemini.js"] if name == "gemini" else ["/opt/bin/" + name]
+        job = make_job(name, level=level, mode="new", cwd="/home/u/proj", job_id="0123456789abcdef", **extra)
+        return harness.build_command(job, exec_prefix=prefix, run_dir="/s/runs", gen=1)
+
+    def test_only_auto_and_the_sandboxed_agents_are_confined(self):
+        for name in ("opencode", "gemini", "pi"):
+            self.assertTrue(harness.sandbox_wanted(name, "auto"), name)
+            for level in ("plan", "unattended", "full"):
+                self.assertFalse(harness.sandbox_wanted(name, level), (name, level))
+        for name in ("claude", "codex", "cursor"):
+            self.assertFalse(harness.sandbox_wanted(name, "auto"), name)
+        self.assertIsNone(self.build("opencode", "plan")["confine"])
+        self.assertIsNone(self.build("opencode", "full")["confine"])
+        self.assertIsNone(self.build("claude", "auto")["confine"])
+
+    def test_opencode_auto_spec_and_privacy(self):
+        cmd = self.build("opencode", "auto")
+        spec = cmd["confine"]
+        self.assertIsNotNone(spec)
+        work = os.path.realpath("/home/u/proj")
+        self.assertIn(work, spec["rw"])
+        self.assertEqual(cmd["env"]["TMPDIR"], "/s/runs/sbx")
+        self.assertEqual(cmd["env"]["npm_config_cache"], "/s/runs/sbx/npm")
+        home = os.path.realpath(fsio.home())
+        self.assertIn(os.path.join(home, ".config", "opencode"), spec["ro"])  # own config read-only
+        self.assertIn(os.path.join(home, ".local", "share", "opencode"), spec["rw"])  # data writable
+        # Plugin code under the cache, and the rest of state, stay read-only; only state's locks are written.
+        self.assertIn(os.path.join(home, ".cache", "opencode"), spec["ro"])
+        self.assertIn(os.path.join(home, ".local", "state", "opencode", "locks"), spec["rw"])
+        self.assertNotIn(os.path.join(home, ".local", "state", "opencode"), spec["rw"])
+        # oh-my-openagent: its settings read-only, its Claude transcripts in the run's private folder,
+        # so nothing under ~/.claude (the Claude sign-in included) is granted.
+        self.assertIn(os.path.join(home, ".omo"), spec["ro"])
+        self.assertEqual(cmd["env"]["CLAUDE_CONFIG_DIR"], "/s/runs/sbx/claude")
+        self.assertIn("/s/runs/sbx/claude", spec["preDirs"])
+        claude_dir = os.path.join(home, ".claude")
+        granted = spec["rw"] + spec["ro"] + spec["mkdir"] + spec["rwFiles"]
+        self.assertFalse(any(p == claude_dir or p.startswith(claude_dir + "/") for p in granted))
+        self.assertTrue(all(not p.startswith(os.path.join(home, ".omo")) for p in spec["rw"] + spec["mkdir"]))
+        # The working folder is in the confinement spec only, never on the command line or env.
+        self.assertNotIn(work, cmd["argv"])
+        self.assertTrue(all(work not in str(v) for v in cmd["env"].values()))
+
+    def test_gemini_auto_moves_state_and_keeps_dotgemini_read_only(self):
+        cmd = self.build("gemini", "auto")
+        spec = cmd["confine"]
+        home = os.path.realpath(fsio.home())
+        self.assertEqual(cmd["env"]["SANDBOX"], "sandbox-exec")
+        self.assertIn(os.path.join(home, ".cache", ".gemini"), spec["rw"])
+        self.assertIn(os.path.join(home, ".gemini"), spec["ro"])
+        self.assertTrue(all(os.path.join(home, ".gemini") != p for p in spec["rw"]))
+        # The admin policy it is started with is readable, and it is the only file of the plugin that is:
+        # without it Gemini CLI reports a policy file error and the run is stopped.
+        policy = os.path.realpath(harness.gemini_policy_path())
+        self.assertIn(policy, spec["ro"])
+        self.assertIn(harness.gemini_policy_path(), cmd["argv"])
+        plugin = os.path.realpath(fsio.plugin_dir())
+        granted = spec["rw"] + spec["ro"] + spec["mkdir"] + spec["rwFiles"]
+        self.assertEqual([p for p in granted if p == plugin or p.startswith(plugin + "/")], [policy])
+
+    def test_pi_auto_session_writable_config_mkdir_only(self):
+        cmd = self.build("pi", "auto")
+        spec = cmd["confine"]
+        home = os.path.realpath(fsio.home())
+        self.assertIn(os.path.join(home, ".pi", "agent"), spec["mkdir"])
+        self.assertIn(os.path.join(home, ".pi"), spec["ro"])
+        session = os.path.realpath(cmd["env"]["PI_CODING_AGENT_SESSION_DIR"])
+        self.assertIn(session, spec["rw"])
+        # No credential file is named in the spec (the sign-in stays readable under the RO config).
+        self.assertTrue(all("auth.json" not in p for group in spec.values()
+                            for p in (group if isinstance(group, list) else [])))
 
 
 if __name__ == "__main__":

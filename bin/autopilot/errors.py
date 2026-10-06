@@ -85,6 +85,9 @@ MESSAGES = {
     "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
                               "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
                               "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
+    "sandbox_unavailable": ("This computer's Linux kernel cannot sandbox a job (no Landlock), so Auto with the "
+                            "shell on is not offered for this agent here. Pick Plan or Unattended, or Full access "
+                            "on your own responsibility."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

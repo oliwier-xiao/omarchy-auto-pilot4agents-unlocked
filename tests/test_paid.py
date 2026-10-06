@@ -94,7 +94,7 @@ class GeminiPolicyTests(PaidCase):
                                         "google_web_search", "get_internal_docs", "complete_task", "invoke_agent"}),
                            ("autoEdit", {"read_file", "list_directory", "glob", "grep_search", "update_topic",
                                          "google_web_search", "get_internal_docs", "complete_task", "invoke_agent",
-                                         "write_file", "replace", "web_fetch"})):
+                                         "write_file", "replace", "web_fetch", "run_shell_command"})):
             mine = [r for r in rules if mode in r.get("modes", [])]
             floor = [r for r in mine if r["toolName"] == "*"]
             self.assertEqual([(r["decision"], r["priority"]) for r in floor], [("deny", 500)], mode)
@@ -104,12 +104,13 @@ class GeminiPolicyTests(PaidCase):
                     self.assertGreater(r["priority"], 500)
                     allowed |= {r["toolName"]} if isinstance(r["toolName"], str) else set(r["toolName"])
             self.assertEqual(allowed, kept, mode)
-        # Auto: no shell, and no edit to Gemini CLI's own settings or a .env file, above the allow list.
+        # Auto allows the shell (confined by the OS sandbox) but never an edit to Gemini CLI's own
+        # settings or a .env file, above the allow list.
         auto_denies = [r for r in rules if "autoEdit" in r.get("modes", []) and r["decision"] == "deny"
                        and r["toolName"] != "*"]
         self.assertEqual(sorted((str(r["toolName"]), r["priority"]) for r in auto_denies),
-                         [("['write_file', 'replace']", 700), ("['write_file', 'replace']", 700),
-                          ("run_shell_command", 700)])
+                         [("['write_file', 'replace']", 700), ("['write_file', 'replace']", 700)])
+        self.assertIn("run_shell_command", kept)
         agents = [r for r in rules if r["toolName"] == "invoke_agent"]
         self.assertTrue(agents and all("codebase_investigator|cli_help|generalist" in r["argsPattern"] for r in agents))
         self.assertIsNone(paid.gemini_policy_gate())
@@ -776,6 +777,26 @@ class PiTests(PaidCase):
         self.assertEqual((preview["ok"], preview["pending"], preview["provider"]), (True, True, "openai-codex"))
         self.assertEqual(self.gate(job)["code"], "pi_auth_invalid")
 
+    def test_pi_sign_in_is_renewed_outside_the_sandbox_right_before_an_auto_run(self):
+        # In the OS sandbox ~/.pi/agent is read-only (Pi runs a key written as !command), so Pi could
+        # renew an expired sign-in there but not keep it, and a provider that rotates its refresh
+        # token would lose the sign-in. The pre-fire check of an Auto job lets Pi renew it first.
+        renew = ["auth", "check", "--provider", "openai-codex", "--json"]
+        keep = renew + ["--no-refresh"]
+        ready = json.dumps({"status": "ready", "provider": "openai-codex", "authType": "oauth"})
+        self.answer(renew, stdout=ready)
+        self.answer(keep, stdout=ready)
+        self.patch(paid.confine, "available", lambda: True)
+        auto = self.job("pi", level="auto", provider="openai-codex", model="gpt-5.5")
+        for phase, argv in (("prefire", renew), ("arm", keep), ("preview", keep)):
+            before = len(self.calls())
+            self.assertIsNone(self.gate(auto, phase=phase)["code"], phase)
+            self.assertEqual([c[1] for c in self.calls()[before:] if c[0] == "pi"], [argv], phase)
+        for level in ("plan", "full"):  # not sandboxed: Auto Pilot never renews a sign-in there
+            before = len(self.calls())
+            self.gate(self.job("pi", level=level, provider="openai-codex", model="gpt-5.5"), phase="prefire")
+            self.assertEqual([c[1] for c in self.calls()[before:] if c[0] == "pi"], [keep], level)
+
 
 # --- Cursor preflights ---------------------------------------------------------------------
 
@@ -1060,6 +1081,21 @@ class DeferTests(PaidCase):
 # --- check_job ---------------------------------------------------------------------------
 
 class GateTests(PaidCase):
+    def test_auto_shell_refused_when_the_kernel_cannot_sandbox(self):
+        # Auto turns the shell on for OpenCode, Gemini and Pi, confined by the OS sandbox; a kernel
+        # without Landlock cannot confine, so the job is refused rather than run unconfined.
+        for name in ("opencode", "gemini", "pi"):
+            job = self.job(name, level="auto", allowPaid=True)
+            if name == "pi":
+                self.pi_ready("openai-codex")
+            self.patch(paid.confine, "available", lambda: False)
+            self.assertEqual(self.gate(job)["code"], "sandbox_unavailable", name)
+            self.patch(paid.confine, "available", lambda: True)
+            self.assertNotEqual(self.gate(job)["code"], "sandbox_unavailable", name)
+        # Plan is not sandboxed, so a kernel without Landlock does not stop it.
+        self.patch(paid.confine, "available", lambda: False)
+        self.assertNotEqual(self.gate(self.job("opencode"))["code"], "sandbox_unavailable")
+
     def test_check_job_gate_order_and_codes(self):
         self.env_extra["cursor"] = {"XDG_CONFIG_HOME": self.home + "/.config"}
         self.write(".config/cursor/cli-config.json", {"approvalMode": S.UNRESTRICTED})
