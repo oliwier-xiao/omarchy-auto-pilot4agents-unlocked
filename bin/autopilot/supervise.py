@@ -13,7 +13,7 @@ import signal
 import subprocess
 import time
 
-from . import consts
+from . import confine, consts
 
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
 _CTRL_RE = re.compile(rb"[\x00-\x08\x0b-\x1f\x7f]")
@@ -146,10 +146,25 @@ def run_agent(cmd, prompt, *, deadline_s, log_fd, on_stdout_line, stop_event, fi
     out_tail = _Ring(consts.RUN_LOG_MAX)
     err_tail = _Ring(consts.STDERR_CAP)
     framer = _LineFramer(consts.LINE_MAX_BYTES, on_stdout_line, ring.add)
+    spec = cmd.get("confine")
+    preexec = None
+    if spec is not None:
+        # The job's folder appears only here, in the preexec closure and the pre-created folders,
+        # never on the agent's command line. Pre-create the writable folders the agent expects
+        # (it is confined the moment it starts, so it cannot make them itself), then confine the
+        # child. apply() raises if the kernel cannot confine, so the spawn fails closed.
+        for folder in spec.get("preDirs", ()):
+            try:
+                os.makedirs(folder, mode=0o700, exist_ok=True)
+            except OSError:
+                result["error"] = "spawn_failed"
+                _finish_log(log_fd, ring, result, 0)
+                return result
+        preexec = confine.preexec(spec)
     try:
         proc = subprocess.Popen(cmd["argv"], env=cmd["env"], cwd=cmd["cwd"], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-                                close_fds=True)
+                                close_fds=True, preexec_fn=preexec)
     except (OSError, ValueError, subprocess.SubprocessError):
         result["error"] = "spawn_failed"
         _finish_log(log_fd, ring, result, 0)

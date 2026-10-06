@@ -26,7 +26,7 @@ import os
 import re
 import stat
 
-from . import bounded, consts, fsio, h5_v2, harness, identity
+from . import bounded, confine, consts, fsio, h5_v2, harness, identity
 from . import usage as usage_mod
 from .errors import ApError
 
@@ -48,6 +48,7 @@ REASON_FOR_CODE = {
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
     "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
+    "sandbox_unavailable": "sandbox_unavailable",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -1202,6 +1203,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2d. Codex: a folder's own .codex/config.toml loads once Codex trusts the folder, past any level
     if code is None and harness_id == "codex":
         code = codex_preflight(cwd, home)
+
+    # 2e. Auto with the shell on is confined by the OS sandbox; refuse it when the kernel cannot confine.
+    if code is None and harness.sandbox_wanted(harness_id, job.get("level")) and not confine.available():
+        code = "sandbox_unavailable"
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None

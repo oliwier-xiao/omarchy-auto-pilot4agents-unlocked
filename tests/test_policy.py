@@ -294,7 +294,8 @@ GEMINI_ALLOWED_TOOLS = {
                 "get_internal_docs", "complete_task", "invoke_agent"),
     # Unlocked Auto adds file edits and web_fetch; its own deny rules keep edits off .gemini and .env.
     "autoEdit": ("read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search",
-                 "get_internal_docs", "complete_task", "invoke_agent", "write_file", "replace", "web_fetch"),
+                 "get_internal_docs", "complete_task", "invoke_agent", "write_file", "replace", "web_fetch",
+                 "run_shell_command"),
 }
 
 
