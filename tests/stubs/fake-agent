@@ -88,9 +88,10 @@ def claude(mode, argv, data):
     if mode == "wrong_init_mode":
         permission = "default"
     source = "ANTHROPIC_API_KEY" if mode == "claude_api_key_source" else "none"
+    tools = ["Read", "Grep"] + (["Agent"] if mode == "wrong_init_tools" else [])
     out({"type": "system", "subtype": "init", "session_id": sid, "permissionMode": permission,
-         "apiKeySource": source, "cwd": os.getcwd(), "tools": ["Read", "Grep"]})
-    if mode in ("wrong_init_mode", "claude_api_key_source"):
+         "apiKeySource": source, "cwd": os.getcwd(), "tools": tools, "mcp_servers": []})
+    if mode in ("wrong_init_mode", "wrong_init_tools", "claude_api_key_source"):
         time.sleep(30)
         out({"type": "assistant", "session_id": sid,
              "message": {"content": [{"type": "text", "text": "should never be reached"}]}})

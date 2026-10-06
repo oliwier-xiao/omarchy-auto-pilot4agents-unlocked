@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "oliwier.auto-pilot4agents-unlocked",
   "name": "Auto Pilot 4 Agents Unlocked",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "oliwier-xiao",
   "license": "MIT",
   "description": "Unlocked edition, with Auto and Full access levels. Write a prompt now and send it later to a Claude Code, OpenCode, Codex, Gemini CLI, Cursor Agent or Pi session: in a few minutes, at a clock time, or right after a usage limit resets. Each job runs headless in a transient systemd user timer, so it fires while the screen is locked.",
