@@ -391,7 +391,9 @@ class HarnessTests(Sandbox):
                            new_session="11111111-2222-4333-8444-555555555555")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/node", "/b/gemini.js"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/usr/bin/node", "/b/gemini.js", "-p", "", "-o", "json", "--approval-mode",
-                                       "default", "--admin-policy", harness.gemini_policy_path(),
+                                       "default", "--extensions", "ap4a-none",
+                                       "--allowed-mcp-server-names", "ap4a-none",
+                                       "--admin-policy", harness.gemini_policy_path(),
                                        "--session-id", "11111111-2222-4333-8444-555555555555"])
         self.assertEqual(harness.gemini_policy_path(), os.path.join(fsio.plugin_dir(), "bin/autopilot/gemini-policy.toml"))
         # Full access already approves every tool, so only it runs without the policy.

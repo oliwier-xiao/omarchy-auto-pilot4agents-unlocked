@@ -461,7 +461,7 @@ Gemini CLI    plan         --approval-mode plan
               unattended   --approval-mode default
               auto         --approval-mode auto_edit
               full         --approval-mode yolo
-              plan, unattended and auto also --admin-policy <plugin folder>/bin/autopilot/gemini-policy.toml
+              plan, unattended and auto also --admin-policy <plugin folder>/bin/autopilot/gemini-policy.toml --extensions ap4a-none --allowed-mcp-server-names ap4a-none
 
 Cursor Agent  plan         --mode ask
               unattended   not offered
@@ -510,6 +510,7 @@ Disarming stops the timer and the service, checks that both are gone, and bumps 
 - A job does not start the agent if, when it fires, the kill switch exists, the plugin is not enabled in the bar, the plugin folder no longer matches its manifest, or its code (`bin/ap4a`, `bin/autopilot`, its bytecode cache and every folder above them) could be changed by anyone but you or root. It is paused and you are told why; arming checks the same code first.
 - Every account on the computer can read a process's command line. The command lines Auto Pilot starts carry only job ids, generations, digests, times, limits, the agent, model, provider and session id, and for Gemini CLI the path of the plugin's own policy file. Never a folder (the working folder, one the folder picker walks or one it lists sessions for), a session file's path, a job's label, a notification's text, a prompt, a key or a token: the agent starts in its working folder instead of being told it, the panel sends every folder and every search to the helper on standard input, and a notification goes to the session bus over the bus's own socket rather than through a program.
 - The system tools it calls (`systemd-run`, `systemctl`, `qs`, `timedatectl`) must be owned by root and writable by nobody else, in folders nobody else can write. Otherwise the call is refused.
+- Gemini CLI below Full access loads no extension or MCP server from a working folder (`--extensions ap4a-none --allowed-mcp-server-names ap4a-none`): a folder's own extension or server would otherwise run its code when Gemini starts, outside the approval policy. The admin policy still covers the tools.
 - Auto Pilot never writes agent configuration, hooks, skills, MCP settings or instruction files, and makes no network requests of its own. Besides its own state and runtime folders, the only folder it makes is `~/AutoPilot`, mode 0700, when you pick No project for a new session and nothing is there yet. Whatever is already at that path is used only when it is a folder of yours, not a link, that nobody else can write; anything else is left as it is and refused. The only level that trusts a folder is Full access for Cursor Agent, through Cursor's own `--trust`.
 
 ### What it reads, and what it never opens

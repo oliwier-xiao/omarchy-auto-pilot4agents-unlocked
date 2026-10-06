@@ -27,6 +27,13 @@ SCHEMA_VERSION = 1
 
 HARNESS_IDS = ("claude", "opencode", "codex", "cursor", "pi", "gemini")
 
+# A folder's Gemini extensions and MCP servers run their own code when Gemini starts, outside the
+# approval policy. Naming only a sentinel that matches nothing enables no extension and allows no
+# MCP server, so none of a project's load. Full access is unrestricted by design, so it keeps none
+# of this (nor the admin policy); the other levels get it.
+_GEMINI_NONE = "ap4a-none"
+_GEMINI_ISOLATION = ("--extensions", _GEMINI_NONE, "--allowed-mcp-server-names", _GEMINI_NONE)
+
 _OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
                   '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
 _OPENCODE_UNATTENDED = ('{"edit":"ask","bash":"ask","webfetch":"ask","websearch":"ask",'
@@ -68,7 +75,7 @@ LEVELS = (
             },
             "gemini": {
                 "caption": "Plan mode. Gemini reads and plans. It does not edit files or run commands.",
-                "argv": ["--approval-mode", "plan"],
+                "argv": ["--approval-mode", "plan"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,
             },
@@ -118,7 +125,7 @@ LEVELS = (
             },
             "gemini": {
                 "caption": "Default approval. Tools that would ask are denied because nobody is there to answer.",
-                "argv": ["--approval-mode", "default"],
+                "argv": ["--approval-mode", "default"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,
             },
@@ -157,7 +164,7 @@ LEVELS = (
             },
             "gemini": {
                 "caption": "Auto edit. File edits are approved. Shell commands would ask, so they are denied.",
-                "argv": ["--approval-mode", "auto_edit"],
+                "argv": ["--approval-mode", "auto_edit"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,
             },
