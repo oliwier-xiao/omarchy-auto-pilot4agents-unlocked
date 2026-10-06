@@ -289,10 +289,11 @@ OPENCODE_READ_ONLY_ALLOWS = (
 
 # The config OpenCode reads last may be set to one value only: the plugin's own read-only agent with the
 # level's rules (opencode_agent_problems). These are its exact openings in a built environment and the
-# README, in the `edition` answer, and in the level table.
+# README, in the `edition` answer (as the helper writes it, and re-encoded), and in the level table.
 _AGENT_HEAD = '{"agent":{"%s":' % edition.OPENCODE_READ_ONLY_AGENT
 OPENCODE_AGENT_CONFIG_SETS = (
     "OPENCODE_CONFIG_" + "CONTENT=" + _AGENT_HEAD,
+    '"OPENCODE_CONFIG_' + 'CONTENT":"' + _AGENT_HEAD.replace('"', '\\"'),
     '"OPENCODE_CONFIG_' + 'CONTENT": "' + _AGENT_HEAD.replace('"', '\\"'),
     '"OPENCODE_CONFIG_' + 'CONTENT": _OPENCODE_READ_ONLY_CONFIG',
 )
