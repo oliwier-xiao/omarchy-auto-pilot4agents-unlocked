@@ -47,7 +47,7 @@ REASON_FOR_CODE = {
     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
-    "codex_project_config": "codex_project_config",
+    "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -378,6 +378,83 @@ def gemini_selected_type(home, cwd=None):
         if value not in _GEMINI_FREE_TYPES:
             return value
     return found[-1] if found else None
+
+
+# A folder's .gemini/settings.json keys that start code when Gemini CLI starts, outside any policy,
+# or widen what a run may reach (dotted paths into the object).
+_GEMINI_SETTINGS_REFUSED = ("hooks", "mcpServers", "mcp.serverCommand", "tools.discoveryCommand",
+                            "tools.callCommand", "tools.sandbox", "telemetry", "agents",
+                            "context.includeDirectories")
+
+
+def _dotted(obj, path):
+    for key in path.split("."):
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(key)
+    return obj
+
+
+def _gemini_env_key_refused(key):
+    """True for a .env variable that redirects Gemini CLI's endpoint, sign-in, settings, proxy or Node."""
+    name = key.upper()
+    if name == "NODE_ENV":
+        return False
+    return (name.startswith(("GEMINI_", "GOOGLE_", "CODE_ASSIST_", "OTEL_", "SANDBOX", "NODE_", "CLOUD_SHELL"))
+            or name.endswith("_PROXY"))
+
+
+_ENV_KEY_RE = re.compile(r"^\s*(?:export\s+)?([\w.-]+)\s*[=:]")
+
+
+def gemini_preflight(cwd, home):
+    """First Gemini CLI refusal for a working folder, or None.
+
+    Gemini CLI runs a trusted folder's .gemini/settings.json hooks, tool discovery and call
+    commands and sandbox launcher when it starts, before and outside the admin policy, and the
+    folder's settings can add MCP servers, telemetry, agents or include directories; a folder whose
+    settings name any of these, or cannot be read, is refused (its sign-in type is the paid gate's).
+    Gemini CLI also loads the first .env it finds from the folder up to / (`.gemini/.env` first,
+    then `.env`) into its own environment, so one that sets its endpoint, sign-in, settings paths,
+    a proxy or Node options is refused too. The home folder's own files are the user's and end the
+    search.
+    """
+    path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
+    home_path = _clean_abs(home, consts.CWD_MAX_BYTES)
+    if path is None or home_path is None:
+        return "gemini_project_config"
+    real = os.path.realpath(path)
+    home_real = os.path.realpath(home_path)
+    settings_path = os.path.join(real, ".gemini", "settings.json")
+    if real != home_real and os.path.lexists(settings_path):
+        try:
+            data = fsio.read_file_nofollow(settings_path, _CONFIG_CAP, owner_uid_or_root=True)
+        except ApError:
+            return "gemini_project_config"
+        obj = _jsonc_object(data) if data and data.strip() else {}
+        if obj is None or any(_dotted(obj, key) for key in _GEMINI_SETTINGS_REFUSED):
+            return "gemini_project_config"
+    for folder in _walk_to_fs_root(real):
+        found = [p for p in (os.path.join(folder, ".gemini", ".env"), os.path.join(folder, ".env"))
+                 if os.path.exists(p)]
+        if not found:
+            continue
+        if folder == home_real or not os.path.isfile(found[0]):
+            return None
+        try:
+            data = fsio.read_file_nofollow(found[0], _CONFIG_CAP, owner_uid_or_root=True)
+        except ApError:
+            return "gemini_project_config"
+        try:
+            text = (data or b"").decode("utf-8")
+        except UnicodeDecodeError:
+            return "gemini_project_config"
+        for line in text.splitlines():
+            match = _ENV_KEY_RE.match(line)
+            if match and _gemini_env_key_refused(match.group(1)):
+                return "gemini_project_config"
+        return None
+    return None
 
 
 def gemini_policy_gate():
@@ -1113,6 +1190,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2b. Gemini CLI: the admin policy that keeps a headless job in its approval mode must apply
     if code is None and harness_id == "gemini" and harness.gemini_policy_wanted(job.get("level")):
         code = gemini_policy_gate()
+
+    # 2b'. Gemini CLI: a folder's own settings and .env load at start, before and outside the policy
+    if code is None and harness_id == "gemini":
+        code = gemini_preflight(cwd, home)
 
     # 2c. OpenCode: plugin code in or above the working folder runs at start, before any level
     if code is None and harness_id == "opencode":

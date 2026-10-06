@@ -82,6 +82,9 @@ MESSAGES = {
     "codex_project_config": ("This folder, or a folder above it, has its own Codex settings in .codex/config.toml. "
                              "Codex would load them, and they can start programs outside its sandbox, so no job runs "
                              "here. Pick another folder."),
+    "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
+                              "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
+                              "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

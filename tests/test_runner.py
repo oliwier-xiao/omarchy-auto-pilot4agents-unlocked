@@ -395,7 +395,9 @@ class HarnessTests(Sandbox):
                            new_session="11111111-2222-4333-8444-555555555555")
         cmd = harness.build_command(literal, exec_prefix=["/usr/bin/node", "/b/gemini.js"], run_dir="/s", gen=1)
         self.assertEqual(cmd["argv"], ["/usr/bin/node", "/b/gemini.js", "-p", "", "-o", "json", "--approval-mode",
-                                       "default", "--admin-policy", harness.gemini_policy_path(),
+                                       "default", "--extensions", "ap4a-none",
+                                       "--allowed-mcp-server-names", "ap4a-none",
+                                       "--admin-policy", harness.gemini_policy_path(),
                                        "--session-id", "11111111-2222-4333-8444-555555555555"])
         self.assertEqual(harness.gemini_policy_path(), os.path.join(fsio.plugin_dir(), "bin/autopilot/gemini-policy.toml"))
         # Full access already approves every tool, so only it runs without the policy.
@@ -950,6 +952,11 @@ class ClassifyTests(unittest.TestCase):
                    run_result(rc=0), "done")
         self.check("opencode", [{"type": "step_start", "sessionID": "ses_abcdefgh1234"}], run_result(rc=0), "done")
         self.check("gemini", [], run_result(rc=0, stdout=b'{\n "response": "OK"\n}'), "done")
+        # Gemini CLI runs on without an admin policy it could not load, so that run was not held to its level.
+        result = self.check("gemini", [], run_result(rc=0, stdout=b'{\n "response": "OK"\n}',
+                                                     stderr=b"[ADMIN] Policy file error in gemini-policy.toml"),
+                            "boundary_mismatch")
+        self.assertEqual(result["detail"], "policy_error")
         # exit code alone never decides, in either direction
         result = self.check("claude", [self.init()], run_result(rc=0), "failed")
         self.assertEqual(result["detail"], "unclassified")
@@ -2632,7 +2639,7 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
-                 "codex_project_config": "codex_project_config"}
+                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")

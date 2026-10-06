@@ -1,11 +1,92 @@
-# This plugin passes this file to every Gemini CLI job as --admin-policy, the policy tier that
-# outranks every other. A job runs with nobody there to answer, and Gemini CLI run headless
-# lets the model leave Plan mode on its own (exit_plan_mode) into approving every tool without
-# asking, or enter Plan mode from Default approval to do the same (enter_plan_mode). So a job may
-# not change its approval mode at all. The helper refuses to start Gemini CLI when this file does
-# not read exactly as harness.GEMINI_POLICY_TEXT.
+# This plugin passes this file to every Gemini CLI job below Full access as --admin-policy, the policy
+# tier that outranks every other: user and folder settings, tools.allowed, MCP trust and
+# ~/.gemini/policies. A job runs with nobody there to answer, so each approval mode is held to a fixed
+# list of tools (every other tool is denied first, then the list is allowed), and no job may change its
+# own approval mode: run headless, exit_plan_mode would otherwise approve every tool. Full access runs
+# without it. The helper refuses to start Gemini CLI when this file does not read exactly as
+# harness.GEMINI_POLICY_TEXT.
 [[rule]]
 toolName = ["enter_plan_mode", "exit_plan_mode"]
 decision = "deny"
 priority = 999
 denyMessage = "This job runs unattended, so its approval mode cannot change."
+
+# Plan reads only.
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 500
+modes = ["plan"]
+denyMessage = "This job is read-only (Plan)."
+
+[[rule]]
+toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic"]
+decision = "allow"
+priority = 600
+modes = ["plan"]
+
+# Unattended runs Gemini CLI's own headless set, and nothing a settings file adds.
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 500
+modes = ["default"]
+denyMessage = "This tool is not available to an unattended job."
+
+[[rule]]
+toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task"]
+decision = "allow"
+priority = 600
+modes = ["default"]
+
+[[rule]]
+toolName = "invoke_agent"
+argsPattern = '\x00"agent_name":"(codebase_investigator|cli_help|generalist)"\x00'
+decision = "allow"
+priority = 600
+modes = ["default"]
+
+# Auto (autoEdit mode) adds file edits and web_fetch, never the shell, nor an edit to Gemini CLI's own
+# settings or to a .env file.
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 500
+modes = ["autoEdit"]
+denyMessage = "This tool is not available at this level."
+
+[[rule]]
+toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task", "write_file", "replace", "web_fetch"]
+decision = "allow"
+priority = 600
+modes = ["autoEdit"]
+
+[[rule]]
+toolName = "invoke_agent"
+argsPattern = '\x00"agent_name":"(codebase_investigator|cli_help|generalist)"\x00'
+decision = "allow"
+priority = 600
+modes = ["autoEdit"]
+
+[[rule]]
+toolName = "run_shell_command"
+decision = "deny"
+priority = 700
+modes = ["autoEdit"]
+denyMessage = "Shell commands are not allowed at this level."
+
+[[rule]]
+toolName = ["write_file", "replace"]
+argsPattern = '\x00"file_path":"[^"]*\.gemini[\\/]'
+decision = "deny"
+priority = 700
+modes = ["autoEdit"]
+denyMessage = "Gemini CLI configuration cannot be edited at this level."
+
+[[rule]]
+toolName = ["write_file", "replace"]
+argsPattern = '\x00"file_path":"[^"]*\.env[^"\\/]*"\x00'
+decision = "deny"
+priority = 700
+modes = ["autoEdit"]
+denyMessage = "Environment files cannot be edited at this level."

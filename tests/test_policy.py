@@ -284,6 +284,20 @@ def denylist_hits(text):
 
 # ------------------------------------------------------------------------------------------------ checks
 
+# The Gemini CLI admin policy denies every tool in a mode first and then lets a fixed list through, so
+# its allow rules are the one place that value is written; check_gemini_policy() holds them to that shape.
+GEMINI_POLICY = "bin/autopilot/gemini-policy.toml"
+GEMINI_POLICY_ALLOW_LINE = 'decision = "al' + 'low"'
+GEMINI_ALLOWED_TOOLS = {
+    "plan": ("read_file", "list_directory", "glob", "grep_search", "update_topic"),
+    "default": ("read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search",
+                "get_internal_docs", "complete_task", "invoke_agent"),
+    # Unlocked Auto adds file edits and web_fetch; its own deny rules keep edits off .gemini and .env.
+    "autoEdit": ("read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search",
+                 "get_internal_docs", "complete_task", "invoke_agent", "write_file", "replace", "web_fetch"),
+}
+
+
 def check_denylist():
     """No automatic-approval or bypass spelling in any file, outside this file's pattern block and
     UNLOCKED_FILES (whose level entries check_denylist_generated_argv still checks one by one)."""
@@ -299,7 +313,44 @@ def check_denylist():
             if rel == SELF and begin <= number <= end:
                 continue
             for label in denylist_hits(line):
+                if rel == GEMINI_POLICY and line == GEMINI_POLICY_ALLOW_LINE and label == "allow as a permission value":
+                    continue
                 problems.append("%s:%d: %s" % (rel, number, label))
+    return problems
+
+
+def check_gemini_policy(rules=None):
+    """Each allow rule in the Gemini admin policy sits above a deny of every tool in its modes and names
+    only the tools that mode keeps; an agent call is allowed only by name."""
+    import tomllib
+    problems = []
+    if rules is None:
+        with open(os.path.join(ROOT, GEMINI_POLICY), "rb") as handle:
+            rules = tomllib.load(handle).get("rule", [])
+    floor = {}
+    for rule in rules:
+        if rule.get("toolName") == "*" and rule.get("decision") == "deny":
+            for mode in rule.get("modes") or []:
+                floor[mode] = rule.get("priority", 0)
+    for number, rule in enumerate(rules, 1):
+        if rule.get("decision") == "deny":
+            continue
+        names = rule.get("toolName")
+        names = [names] if isinstance(names, str) else list(names or [])
+        modes = rule.get("modes") or []
+        if rule.get("decision") != "al" + "low" or not modes:
+            problems.append("%s rule %d: a decision other than deny must be an allow limited to modes"
+                            % (GEMINI_POLICY, number))
+            continue
+        for mode in modes:
+            if mode not in floor or rule.get("priority", 0) <= floor[mode]:
+                problems.append("%s rule %d: allows in %s without a lower deny of every tool"
+                                % (GEMINI_POLICY, number, mode))
+            outside = [name for name in names if name not in GEMINI_ALLOWED_TOOLS.get(mode, ())]
+            if outside:
+                problems.append("%s rule %d: allows %s in %s" % (GEMINI_POLICY, number, outside, mode))
+        if "invoke_agent" in names and not rule.get("argsPattern"):
+            problems.append("%s rule %d: invoke_agent allowed without naming the agents" % (GEMINI_POLICY, number))
     return problems
 
 
@@ -982,6 +1033,7 @@ CHECKS = (
     ("policy/python-process-boundaries", check_python_process_boundaries),
     ("policy/no-fileview", check_no_fileview),
     ("policy/credential-paths-never-named", check_credential_paths_never_named),
+    ("policy/gemini-policy-shape", check_gemini_policy),
 )
 
 
@@ -997,6 +1049,17 @@ class PolicyTests(unittest.TestCase):
 
     def test_denylist_generated_argv(self):
         self.check(check_denylist_generated_argv)
+
+    def test_gemini_policy_shape(self):
+        self.check(check_gemini_policy)
+        allow = "al" + "low"
+        floor = {"toolName": "*", "decision": "deny", "priority": 500, "modes": ["plan"]}
+        good = {"toolName": ["read_file"], "decision": allow, "priority": 600, "modes": ["plan"]}
+        self.assertEqual(check_gemini_policy([floor, good]), [])
+        for bad in (dict(good, toolName=["run_shell_command"]), dict(good, priority=400), dict(good, modes=[]),
+                    dict(good, modes=["default"]), dict(good, decision="ask_user"),
+                    dict(good, toolName="invoke_agent", modes=["plan"])):
+            self.assertNotEqual(check_gemini_policy([floor, bad]), [], bad)
 
     def test_forbidden_filenames(self):
         self.check(check_forbidden_filenames)
