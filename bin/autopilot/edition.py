@@ -52,13 +52,23 @@ _CLAUDE_CONFIG_WRITES = "Write(~/.claude/**),Edit(~/.claude/**),Write(.claude/**
 _GEMINI_NONE = "ap4a-none"
 _GEMINI_ISOLATION = ("--extensions", _GEMINI_NONE, "--allowed-mcp-server-names", _GEMINI_NONE)
 
-_OPENCODE_PLAN = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
-                  '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
-# Unattended turns the same tools off as Plan rather than leaving them to ask. Nobody is there to
-# answer either way, but a tool that is off is never offered to the model, while one left to ask is
-# offered and checked call by call, which OpenCode does not do for every command.
-_OPENCODE_UNATTENDED = ('{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
-                        '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
+# OpenCode checks a permission inside each of its own tools, so a tool that a plugin or an MCP server
+# adds, or a plugin's own tool of the same name (oh-my-openagent replaces task and adds a tmux shell),
+# is never asked about: it runs whatever edit and bash say. These rules come after OpenCode's own, so
+# "*" first turns every tool off, and a tool that is off is never offered to the model. Only the
+# read-only tools named next are back on; .env files stay unread as OpenCode has them by default.
+# Nothing is left to ask: nobody is there to answer, and a tool that asks is still offered.
+OPENCODE_READ_ONLY_TOOLS = ("read", "glob", "grep", "list", "todowrite", "skill")
+_OPENCODE_READ_ONLY = ('{"*":"deny",'
+                       '"read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},'
+                       '"glob":"allow","grep":"allow","list":"allow","todowrite":"allow","skill":"allow",'
+                       '"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny",'
+                       '"task":"deny","external_directory":"deny","doom_loop":"deny"}')
+# Plan and Unattended both run without plugins (--pure): a plugin's hooks run in OpenCode itself and
+# write where they like (oh-my-openagent keeps a .omo folder in the working folder), whatever the
+# rules above say about the model's tools. Auto and Full keep your plugins.
+_OPENCODE_PLAN = _OPENCODE_READ_ONLY
+_OPENCODE_UNATTENDED = _OPENCODE_READ_ONLY
 # Auto turns shell off for the same reason: left to ask, a command headed by cd with a redirection
 # is never asked about and writes wherever it points, outside the working folder included.
 _OPENCODE_AUTO = ('{"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow",'
@@ -86,7 +96,8 @@ LEVELS = (
                 "initPermissionMode": "plan",
             },
             "opencode": {
-                "caption": "Built-in plan agent without plugins. Edits, shell, web and subagents are denied.",
+                "caption": ("Built-in plan agent without plugins. Only reads run: edits, shell, web, subagents and "
+                            "every tool from a plugin or an MCP server are off."),
                 "argv": ["--pure", "--agent", "plan"],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_PLAN},
                 "initPermissionMode": None,
@@ -137,8 +148,9 @@ LEVELS = (
                 "initPermissionMode": "dontAsk",
             },
             "opencode": {
-                "caption": "Edits, shell, web and subagents are off, since nobody is there to approve them. Reads still work.",
-                "argv": [],
+                "caption": ("Without plugins. Edits, shell, web, subagents and every tool from a plugin or an MCP "
+                            "server are off, since nobody is there to approve them. Reads still work."),
+                "argv": ["--pure"],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_UNATTENDED},
                 "initPermissionMode": None,
             },

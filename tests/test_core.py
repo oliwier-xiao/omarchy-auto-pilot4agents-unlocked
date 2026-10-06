@@ -743,12 +743,23 @@ class DispatcherTests(Sandbox):
         self.assertEqual([lv["id"] for lv in obj["levels"]], ["plan", "unattended", "auto", "full"])
         self.assertEqual(edition.LEVEL_IDS, ("plan", "unattended", "auto", "full"))
         for lv in edition.LEVELS:
-            value = lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"]
-            # Only the unlocked levels may allow a permission outright.
-            extra = {"al" + "low"} if lv["id"] in ("auto", "full") else set()
+            rules = json.loads(lv["harness"]["opencode"]["env"]["OPENCODE_PERMISSION"])
             # Nothing is left to ask: a tool that asks is offered, and OpenCode does not ask before
             # every command it runs (a cd with a redirection writes unasked).
-            self.assertTrue(set(json.loads(value).values()) <= {"deny"} | extra, lv["id"])
+            if lv["id"] in ("auto", "full"):
+                # Only the unlocked levels may allow a permission outright.
+                self.assertTrue(set(rules.values()) <= {"deny", "al" + "low"}, lv["id"])
+                continue
+            # Below Auto every tool is off first, so one a plugin or an MCP server adds is never
+            # offered, and only the read-only tools come back.
+            self.assertEqual((list(rules)[0], rules["*"]), ("*", "deny"), lv["id"])
+            for key, rule in rules.items():
+                actions = set(rule.values()) if isinstance(rule, dict) else {rule}
+                self.assertLessEqual(actions, {"al" + "low", "deny"}, key)
+                if "al" + "low" in actions:
+                    self.assertIn(key, edition.OPENCODE_READ_ONLY_TOOLS)
+            # No plugin loads: its hooks run inside OpenCode, outside every rule.
+            self.assertIn("--pure", lv["harness"]["opencode"]["argv"], lv["id"])
         with open(os.path.join(ROOT, "manifest.json")) as handle:
             manifest = json.load(handle)
         info = obj["edition"]
