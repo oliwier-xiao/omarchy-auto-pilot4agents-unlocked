@@ -46,7 +46,7 @@ REASON_FOR_CODE = {
     "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
-    "gemini_policy": "gemini_policy",
+    "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -586,6 +586,31 @@ def opencode_project_config(cwd):
     return False
 
 
+def opencode_preflight(cwd):
+    """First OpenCode refusal for a working folder, or None.
+
+    OpenCode imports and runs every `.ts`/`.js` under a folder's `.opencode/plugin` or
+    `.opencode/plugins` the moment it starts, before any permission or level applies, and
+    OPENCODE_DISABLE_PROJECT_CONFIG does not stop it. So a folder whose tree, up to its repository
+    root, carries such plugin code is refused: an unattended run there would run that code. Config
+    that only redefines agents, permissions, MCP servers or tools is neutralised by the env flag,
+    not refused here. Stat and one scandir per folder; nothing is read or parsed.
+    """
+    path = _clean_abs(cwd, consts.CWD_MAX_BYTES)
+    if path is None:
+        return "opencode_plugin_code"
+    for folder in _walk_to_git_root(os.path.realpath(path)):
+        for name in ("plugin", "plugins"):
+            plugin_dir = os.path.join(folder, ".opencode", name)
+            try:
+                with os.scandir(plugin_dir) as it:
+                    if any(e.name.endswith((".ts", ".js", ".mjs", ".cjs")) for e in it):
+                        return "opencode_plugin_code"
+            except OSError:
+                continue
+    return None
+
+
 def opencode_verbose(exec_prefix, provider, deadline_s):
     """parse_verbose_blocks of `opencode models <provider> --verbose` (20 s, 1 MiB), or None."""
     if provider not in ("opencode", "opencode-go") or not _exec_ok(exec_prefix):
@@ -742,10 +767,20 @@ def cursor_trusted(workspace_real, home):
 
 
 def cursor_cli_config_verdict(obj):
-    """cursor_autorun_config | cursor_network_config | None for a parsed cli-config.json object."""
+    """cursor_autorun_config | cursor_network_config | None for a parsed cli-config.json object.
+
+    Only an absent approval mode or "allowlist" is accepted; "auto-review" and "unrestricted" both
+    let Cursor run tools without asking, which nobody is there to answer. A non-empty permissions
+    allow list is the same (it pre-approves Shell, Write, WebFetch or MCP), so it is refused too.
+    """
     if not isinstance(obj, dict):
         return None
-    if obj.get("approvalMode") == "unrestricted":
+    mode = obj.get("approvalMode")
+    if mode is not None and mode != "allowlist":
+        return "cursor_autorun_config"
+    permissions = obj.get("permissions")
+    allow = permissions.get(_ALLOW_KEY) if isinstance(permissions, dict) else None
+    if (allow if isinstance(allow, list) else []) or (allow and not isinstance(allow, list)):
         return "cursor_autorun_config"
     sandbox = obj.get("sandbox")
     if isinstance(sandbox, dict) and sandbox.get("networkAccess") == "allow_all":
@@ -754,12 +789,19 @@ def cursor_cli_config_verdict(obj):
 
 
 def claude_project_allow_nonempty(obj):
-    """True when a .claude/settings.json object carries a non-empty permissions allow list."""
-    permissions = obj.get("permissions") if isinstance(obj, dict) else None
+    """True when a .claude settings object carries a non-empty permissions allow list or hooks.
+
+    Both are things Cursor applies from an imported Claude config: allow rules pre-approve tools,
+    and a hook is a command Cursor runs on its own.
+    """
+    if not isinstance(obj, dict):
+        return False
+    permissions = obj.get("permissions")
     rules = permissions.get(_ALLOW_KEY) if isinstance(permissions, dict) else None
-    if isinstance(rules, list):
-        return len(rules) > 0
-    return bool(rules)
+    if (len(rules) > 0 if isinstance(rules, list) else bool(rules)):
+        return True
+    hooks = obj.get("hooks")
+    return bool(hooks) if isinstance(hooks, (dict, list)) else False
 
 
 def cursor_preflight(cwd, home, env):
@@ -783,15 +825,22 @@ def cursor_preflight(cwd, home, env):
 
     real = os.path.realpath(workspace)
     folders = _walk_to_git_root(real)
-    if any(os.path.lexists(os.path.join(folder, ".cursor", "cli.json")) for folder in folders):
-        return "cursor_project_rules"
+    # Cursor's own project files are read from the folder up to the git root: its CLI rules, and
+    # the hooks and MCP servers it would run. Each is refused anywhere on that walk.
+    for folder in folders:
+        if any(os.path.lexists(os.path.join(folder, ".cursor", name))
+               for name in ("cli.json", "hooks.json", "mcp.json")):
+            return "cursor_project_rules"
+    # Cursor imports a Claude config from the repository root (settings.json and the untracked
+    # settings.local.json), applying its allow rules and hooks. The user's own ~/.claude is theirs.
     root = folders[-1]
     if root != os.path.realpath(home_path):
-        settings_path = os.path.join(root, ".claude", "settings.json")
-        settings, refused = _read_config(settings_path, _CONFIG_CAP)
-        if refused or (settings is None and os.path.lexists(settings_path)) \
-                or claude_project_allow_nonempty(settings):
-            return "cursor_project_rules"
+        for name in ("settings.json", "settings.local.json"):
+            settings_path = os.path.join(root, ".claude", name)
+            settings, refused = _read_config(settings_path, _CONFIG_CAP)
+            if refused or (settings is None and os.path.lexists(settings_path)) \
+                    or claude_project_allow_nonempty(settings):
+                return "cursor_project_rules"
 
     if not cursor_trusted(real, home_path):
         return "cursor_untrusted"
@@ -991,6 +1040,10 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
     # 2b. Gemini CLI: the admin policy that keeps a headless job in its approval mode must apply
     if code is None and harness_id == "gemini" and harness.gemini_policy_wanted(job.get("level")):
         code = gemini_policy_gate()
+
+    # 2c. OpenCode: a working folder whose tree carries plugin code runs it at start, before any level
+    if code is None and harness_id == "opencode":
+        code = opencode_preflight(cwd)
 
     # 3. sign-in probes (4. paid refusal is folded in where one answer decides both)
     login_kind = None

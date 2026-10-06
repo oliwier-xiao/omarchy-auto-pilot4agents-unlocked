@@ -115,6 +115,8 @@ V2_MESSAGES = {
                          "Trust this workspace."),
     "gemini_policy": ("Gemini CLI would not apply the policy that keeps a job in its approval mode: "
                       "/etc/gemini-cli/policies has policies of its own, or the plugin's policy file failed a check."),
+    "opencode_plugin_code": ("This folder, or a folder above it in the same repository, has OpenCode plugin code "
+                             "in .opencode/plugin. OpenCode runs it at startup, so no job runs here. Pick another folder."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -134,6 +136,7 @@ V2_REASONS = {
     "quota_final": "The provider reports no quota or balance left, so it does not retry.",
     "cursor_sandbox": "Cursor's sandbox could not start, so nothing ran. Turn it off in cursor-agent.",
     "gemini_policy": "Gemini CLI would not apply the policy that keeps the job in its approval mode, so nothing ran.",
+    "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
 }
 
 
@@ -1925,6 +1928,8 @@ class V2CoreTests(Sandbox):
              trig(self.draft(harness="opencode", model="opencode/big-pickle"), kind="go_window_reset")),
             ("pi_slash_prompt", "prompt", self.pi_draft(prompt="/llama hello")),
             ("pi_slash_prompt", "prompt", self.pi_draft(prompt="  \n /help")),
+            ("pi_slash_prompt", "prompt", self.pi_draft(prompt="\ufeff/llama")),
+            ("pi_slash_prompt", "prompt", self.pi_draft(prompt=" \ufeff /help")),
         ]
         for code, field, draft in table:
             expect(code, field, draft)
@@ -2088,7 +2093,8 @@ class V2CoreTests(Sandbox):
                   "cursor_network_config": "target.cwd", "cursor_project_rules": "target.cwd",
                   "cursor_untrusted": "target.cwd", "not_logged_in": "harness", "pi_auth_invalid": "provider",
                   "paid_blocked": "allowPaid", "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid",
-                  "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness"}
+                  "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness",
+                  "opencode_plugin_code": "target.cwd"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None

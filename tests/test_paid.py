@@ -332,6 +332,29 @@ class OpenCodeTests(PaidCase):
         path = self.write(".cache/opencode/models.json", document, mtime=mtime)
         return path
 
+    def test_a_folder_with_opencode_plugin_code_is_refused(self):
+        # OpenCode imports .opencode/plugin/*.ts at startup, before any permission; so a working
+        # folder whose tree up to its git root carries such code runs it with nobody watching.
+        self.patch(fsio, "_check_ancestors", lambda parent, owners: None)
+        self.assertIsNone(paid.opencode_preflight(self.work))
+        self.assertIsNone(self.gate(self.job("opencode"))["code"])
+        for rel, hit in ((".opencode/plugin/evil.ts", True), (".opencode/plugins/x.js", True),
+                         (".opencode/plugin/README.md", False), (".opencode/tool/t.ts", False),
+                         ("opencode.json", False)):
+            path = os.path.join(self.work, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w").close()
+            self.assertEqual(paid.opencode_preflight(self.work) == "opencode_plugin_code", hit, rel)
+            os.remove(path)
+        os.makedirs(os.path.join(self.work, ".git"), exist_ok=True)
+        deep = self.mkdir("proj/a/b")
+        os.makedirs(os.path.join(self.work, ".opencode", "plugin"), exist_ok=True)
+        open(os.path.join(self.work, ".opencode", "plugin", "p.ts"), "w").close()
+        self.assertEqual(paid.opencode_preflight(deep), "opencode_plugin_code")
+        g = self.gate(self.job("opencode", target={"mode": "new", "cwd": deep, "sessionId": None,
+                                                    "sessionPath": None}))
+        self.assertEqual(g["code"], "opencode_plugin_code")
+
     def test_opencode_verbose_parser_7_free_fixture(self):
         text = S.verbose_text(S.seven_free_blocks())
         parsed = paid.parse_verbose_blocks(text)
@@ -630,10 +653,13 @@ class CursorTests(PaidCase):
     def test_cursor_cli_config_autorun_network(self):
         verdict = paid.cursor_cli_config_verdict
         self.assertEqual(verdict({"approvalMode": S.UNRESTRICTED}), "cursor_autorun_config")
+        self.assertEqual(verdict({"approvalMode": S.AUTO_REVIEW}), "cursor_autorun_config")
+        self.assertEqual(verdict({"permissions": {S.ALLOW: ["Shell(ls)"]}}), "cursor_autorun_config")
+        self.assertEqual(verdict({"permissions": {S.ALLOW: "Write"}}), "cursor_autorun_config")
         self.assertEqual(verdict({"sandbox": {"networkAccess": "allow_all"}}), "cursor_network_config")
         self.assertEqual(verdict({"approvalMode": S.UNRESTRICTED, "sandbox": {"networkAccess": "allow_all"}}),
                          "cursor_autorun_config")
-        for fine in ({}, {"approvalMode": "allowlist"}, {"approvalMode": S.AUTO_REVIEW},
+        for fine in ({}, {"approvalMode": "allowlist"}, {"approvalMode": "allowlist", "permissions": {S.ALLOW: []}},
                      {"sandbox": {"networkAccess": "allowlist"}}, {"sandbox": "allow_all"}, None, []):
             self.assertIsNone(verdict(fine), fine)
 
@@ -655,7 +681,7 @@ class CursorTests(PaidCase):
         self.write(config, {"approvalMode": "allowlist", "sandbox": {"mode": "enabled", "networkAccess": "allow_all"}})
         self.assertEqual(paid.cursor_preflight(self.work, self.home, self.env), "cursor_network_config")
         self.write(config, {"approvalMode": S.AUTO_REVIEW, "permissions": {S.ALLOW: ["Shell(ls)"]}})
-        self.assertIsNone(paid.cursor_preflight(self.work, self.home, self.env))
+        self.assertEqual(paid.cursor_preflight(self.work, self.home, self.env), "cursor_autorun_config")
         for broken in ("{broken", " " * (256 * 1024 + 1)):
             self.write(config, broken)
             self.assertEqual(paid.cursor_preflight(self.work, self.home, self.env), "cursor_autorun_config")
@@ -691,16 +717,31 @@ class CursorTests(PaidCase):
         self.write("plain/deep/.cursor/cli.json", "{}")
         self.assertEqual(paid.cursor_preflight(plain, self.home, self.env), "cursor_project_rules")
 
+        # Cursor also runs a folder's own hooks and MCP servers; both are refused up to the git root.
+        for rel in ("code/repo/.cursor/hooks.json", "code/repo/pkg/.cursor/mcp.json"):
+            path = self.write(rel, "{}")
+            self.assertEqual(paid.cursor_preflight(work, self.home, self.env), "cursor_project_rules", rel)
+            os.remove(path)
+        # An untracked settings.local.json at the root, with allow rules or hooks, is refused.
+        for body in ({"permissions": {S.ALLOW: ["Bash(ls)"]}}, {"hooks": {"PreToolUse": [{"command": "x"}]}}):
+            self.write("code/repo/.claude/settings.local.json", body)
+            self.assertEqual(paid.cursor_preflight(work, self.home, self.env), "cursor_project_rules", body)
+        os.remove(self.path("code/repo/.claude/settings.local.json"))
+
         # The user's own ~/.claude/settings.json is accepted, even with HOME as the repository root.
         self.mkdir(".git")
         notes = self.mkdir("notes")
         self.trust(notes)
         self.write(".claude/settings.json", {"permissions": {S.ALLOW: ["Bash(git status)"]}})
         self.assertIsNone(paid.cursor_preflight(notes, self.home, self.env))
+        self.write(".cursor/hooks.json", "{}")   # ~/.cursor is the user's own too
+        self.assertIsNone(paid.cursor_preflight(notes, self.home, self.env))
+        os.remove(self.path(".cursor/hooks.json"))
 
         allow = paid.claude_project_allow_nonempty
         self.assertTrue(allow({"permissions": {S.ALLOW: ["x"]}}))
         self.assertTrue(allow({"permissions": {S.ALLOW: "Bash"}}))
+        self.assertTrue(allow({"hooks": {"PreToolUse": [{"command": "x"}]}}))
         for value in ({}, None, {"permissions": None}, {"permissions": {S.ALLOW: []}}, []):
             self.assertFalse(allow(value), value)
 
@@ -748,8 +789,9 @@ class CursorTests(PaidCase):
         self.trust(work)
         config = self.write(".config/cursor/cli-config.json", {"approvalMode": "allowlist"})
         settings = self.write("r/.claude/settings.json", {"permissions": {}})
+        settings_local = self.write("r/.claude/settings.local.json", {"permissions": {}})
         for rel in (".config/cursor/auth.json", ".config/cursor/chats/abc/def/store.db", ".cursor/projects/x/worker.log",
-                    "r/.claude/settings.local.json", ".claude/settings.json"):
+                    ".claude/settings.json"):
             self.write(rel, "{}")
         opened = []
         real_open = os.open
@@ -762,7 +804,8 @@ class CursorTests(PaidCase):
         verdict = paid.cursor_preflight(work, self.home, self.env)
         setattr(os, "open", real_open)
         self.assertIsNone(verdict)
-        self.assertEqual(sorted(opened), sorted([config, os.path.realpath(settings)]))
+        self.assertEqual(sorted(opened),
+                         sorted([config, os.path.realpath(settings), os.path.realpath(settings_local)]))
 
 
 # --- pre-fire defer ------------------------------------------------------------------------

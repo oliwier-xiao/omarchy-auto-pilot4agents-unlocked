@@ -23,7 +23,7 @@ late_answers_keep_the_cursor_the_place_and_the_highlight no_project_is_made_once
 hover_counts_only_when_the_pointer_moves folders_closed_or_hidden_under_the_cursor typed_paths_and_refusals
 the_tree_scrolls_to_a_revealed_folder new_session_button_names_its_folder_and_agent
 a_typed_folder_that_is_not_there_suggests_real_ones a_folder_the_helper_refuses_is_said_before_a_pick
-a_new_session_waits_for_its_folder_check sendto_starts_with_no_agent_and_says_what_is_missing
+a_refusal_names_the_folder_safely a_new_session_waits_for_its_folder_check sendto_starts_with_no_agent_and_says_what_is_missing
 typing_words_finds_folders_anywhere the_newest_search_wins_and_an_earlier_open_is_dropped"
 
 export QT_QPA_PLATFORM=offscreen
@@ -816,6 +816,25 @@ Item {
       check(C, root.picks.length === 0 && lastNotice().text === sentence, "and on Enter: " + lastNotice().text)
       check(C, root.calls("checkFolder").length === asked + 1, "a no is asked again on Enter, in case it was fixed")
     }, function () { return sheet.newState === "refused" })
+
+    C = "a_refusal_names_the_folder_safely"
+    step(C, function (C) {
+      fresh({})
+      svc.folderStates = { "/home/tester/My Projects": { state: "refused", reason: "shared" } }
+      root.typeText("~/My Projects")
+    })
+    step(C, function (C) {
+      var sentence = "Others can write to ~/My Projects, so no agent runs there unattended. chmod go-w ~/'My Projects' fixes that."
+      check(C, sheet.newLine === sentence, "the command quotes the folder: " + sheet.newLine)
+      fresh({})
+      svc.folderStates = { "/home/tester/.config": { state: "refused", reason: "protected" } }
+      root.typeText("~/.config")
+    }, function () { return sheet.newCwd === "/home/tester/My Projects" && sheet.newState === "refused" })
+    step(C, function (C) {
+      var sentence = "~/.config holds settings or programs that agents or " + Edition.DISPLAY_NAME
+        + " run with, so no job runs there. Pick a project folder."
+      check(C, sheet.newLine === sentence, "a protected folder: " + sheet.newLine)
+    }, function () { return sheet.newCwd === "/home/tester/.config" && sheet.newState === "refused" })
 
     C = "a_new_session_waits_for_its_folder_check"
     step(C, function (C) {

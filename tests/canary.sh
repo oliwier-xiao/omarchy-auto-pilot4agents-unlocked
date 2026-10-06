@@ -418,9 +418,16 @@ if pi_runs:
            "pi: the agent's argv and environment carry no prompt text")
     expect("--offline" in argv and "--tools" in argv and argv[argv.index("--tools") + 1] == "read,grep,find,ls"
            and argv[argv.index("--provider") + 1] == "openai-codex", "pi: the agent started read-only on the armed provider")
-    allowed = {"HOME", "PATH", "LANG", "TERM", "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK", "LC_CTYPE"}
+    allowed = {"HOME", "PATH", "LANG", "TERM", "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK", "LC_CTYPE",
+               "PI_CODING_AGENT_SESSION_DIR"}
     extra = sorted(set(entry.get("env") or {}) - allowed)
     expect(not extra, "pi: the agent's environment is the Pi allowlist", ", ".join(extra))
+    # The session folder is derived from the working folder and travels in the environment, never
+    # on the command line, where every account could read it.
+    expect("PI_CODING_AGENT_SESSION_DIR" in (entry.get("env") or {}),
+           "pi: a new session's folder is pinned in the environment")
+    expect(not any(folder_needle.decode() in part for part in argv),
+           "pi: no folder marker on the Pi command line")
 
 # ---------------------------------------------------------------- canary_cursor_fire
 # Cursor Agent runs like the others since its one-time live check passed: the job is previewed,

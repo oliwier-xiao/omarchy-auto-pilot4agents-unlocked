@@ -106,7 +106,9 @@ DIAG_RE = re.compile(r"^ap4a: (E_NOT_SYSTEMD|STALE|PAUSED|NEEDS_CONFIRM|MISSED|S
                      r"E_INTERNAL) job=[0-9a-f]{16} gen=[0-9]+$")
 ALLOWED_ENV = {"HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_CONFIG_HOME",
                "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "LANG", "NO_COLOR", "TERM", "PATH",
-               "OPENCODE_PERMISSION", "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK"}
+               "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG",
+               "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_CRON",
+               "PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK", "PI_CODING_AGENT_SESSION_DIR"}
 V1_HARNESSES = ("claude", "opencode", "codex", "gemini")
 CURSOR_UUID = "5b0a3c1e-7d2f-4a8b-9c6d-0e1f2a3b4c5d"
 PI_UUID = "01a0a56f-6db2-76b1-a858-8cc1c56c0a2f"
@@ -355,7 +357,7 @@ def expected_argv(job, exec_prefix, run_dir, gen):
         argv += {"resume": ["-s", s], "fork": ["-s", t["sessionId"], "--fork"],
                  "new": ["--title", "autopilot-" + job["id"][:8]]}[mode]
     elif name == "codex":
-        argv = exec_prefix + ["exec"] + lv + [
+        argv = exec_prefix + ["exec", "--ignore-rules"] + lv + [
             "--json", "--color", "never", "-o", run_dir + "/" + job["id"] + "-g" + str(gen) + ".last.txt"]
         argv += ["--skip-git-repo-check"] if t["allowNonGit"] else []
         argv += ["-m", model] if model else []
@@ -379,12 +381,13 @@ class HarnessTests(Sandbox):
         cmd = harness.build_command(literal, exec_prefix=["/opt/claude"], run_dir="/s/runs", gen=3)
         self.assertEqual(cmd["argv"], ["/opt/claude", "-p", "--output-format", "stream-json", "--verbose",
                                        "--permission-mode", "plan", "--permission-prompts", "none",
+                                       "--setting-sources", "user", "--strict-mcp-config",
                                        "--max-turns", "15",
                                        "--resume", "3f2a0c19-0000-4000-8000-000000000001"])
         literal = make_job("codex", level="unattended", mode="new", job_id="0123456789abcdef", allow_non_git=True,
                            model="gpt-5.5")
         cmd = harness.build_command(literal, exec_prefix=["/opt/codex"], run_dir="/s/runs", gen=2)
-        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "-s", "workspace-write", "--json",
+        self.assertEqual(cmd["argv"], ["/opt/codex", "exec", "--ignore-rules", "-s", "workspace-write", "--json",
                                        "--color", "never", "-o", "/s/runs/0123456789abcdef-g2.last.txt",
                                        "--skip-git-repo-check", "-m", "gpt-5.5", "-"])
         literal = make_job("gemini", level="unattended", mode="new", job_id="0123456789abcdef",
@@ -496,6 +499,7 @@ class HarnessTests(Sandbox):
                 self.assertEqual(env["XDG_RUNTIME_DIR"], self.runtime)
                 self.assertEqual(env["XDG_DATA_HOME"], self.home + "/.local/share")
                 self.assertEqual("OPENCODE_PERMISSION" in env, name == "opencode")
+                self.assertEqual(env.get("OPENCODE_DISABLE_PROJECT_CONFIG"), "1" if name == "opencode" else None)
         os.chmod(self.runtime, 0o755)
         self.assertNotIn("XDG_RUNTIME_DIR", harness.agent_env("claude", "plan"))
         with self.assertRaises(ApError):
@@ -538,7 +542,7 @@ class HarnessTests(Sandbox):
         self.assertTrue(preview["display"].endswith("<stdin>"))
         self.assertEqual(preview["levelCaption"], edition.level("plan")["harness"]["claude"]["caption"])
         self.assertRegex(preview["commandDigest"], r"^[0-9a-f]{64}$")
-        self.assertEqual(preview["env"], {})
+        self.assertEqual(preview["env"], {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CRON": "1"})
         codex_link = self.place_cli("codex")
         cjob = make_job("codex", mode="new", cwd=cwd, link=codex_link)
         self.assertEqual(harness.preview_command(cjob)["warnings"], ["non_git_dir"])
@@ -1894,7 +1898,8 @@ class V2HarnessTests(Sandbox):
                     folder = env["PI_CODING_AGENT_SESSION_DIR"]
                     self.assertTrue(harness.pi_session_path_ok(folder + "/x_" + value + ".jsonl"), folder)
             if "--session-id" in values:
-                self.assertNotIn("PI_CODING_AGENT_SESSION_DIR", env)
+                self.assertEqual(env["PI_CODING_AGENT_SESSION_DIR"],
+                                 harness._pi_default_dir(os.path.realpath(job["target"]["cwd"])))
 
     def test_agent_env_cursor_pi_allowlist(self):
         os.environ.update({"CURSOR_API_KEY": "k", "CURSOR_AUTH_TOKEN": "t", "CURSOR_API_ENDPOINT": "https://x",
@@ -2595,7 +2600,7 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_autorun_config": "cursor_autorun_config", "cursor_network_config": "cursor_network_config",
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
-                 "gemini_policy": "gemini_policy"}
+                 "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")
