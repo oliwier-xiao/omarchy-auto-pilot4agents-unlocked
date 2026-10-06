@@ -113,8 +113,6 @@ V2_MESSAGES = {
     "cursor_project_rules": "This folder has its own Cursor or Claude allow rules, which Cursor would apply.",
     "cursor_untrusted": ("Cursor does not trust this folder yet. Open cursor-agent in this folder once and choose "
                          "Trust this workspace."),
-    "gemini_policy": ("Gemini CLI would not apply the policy that keeps a job in its approval mode: "
-                      "/etc/gemini-cli/policies has policies of its own, or the plugin's policy file failed a check."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -133,7 +131,6 @@ V2_REASONS = {
     "monthly_limit": "The monthly limit is used up, so it does not retry.",
     "quota_final": "The provider reports no quota or balance left, so it does not retry.",
     "cursor_sandbox": "Cursor's sandbox could not start, so nothing ran. Turn it off in cursor-agent.",
-    "gemini_policy": "Gemini CLI would not apply the policy that keeps the job in its approval mode, so nothing ran.",
 }
 
 
@@ -2088,7 +2085,7 @@ class V2CoreTests(Sandbox):
                   "cursor_network_config": "target.cwd", "cursor_project_rules": "target.cwd",
                   "cursor_untrusted": "target.cwd", "not_logged_in": "harness", "pi_auth_invalid": "provider",
                   "paid_blocked": "allowPaid", "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid",
-                  "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid", "gemini_policy": "harness"}
+                  "paid_pi_claude": "allowPaid", "paid_pi_key": "allowPaid"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None
