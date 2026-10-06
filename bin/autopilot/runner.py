@@ -31,7 +31,8 @@ _REASON_FOR_CODE = {"paid_blocked": "paid_blocked", "paid_zen": "paid_blocked", 
                     "cursor_autorun_config": "cursor_autorun_config",
                     "cursor_network_config": "cursor_network_config",
                     "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
-                    "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed"}
+                    "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
+                    "gemini_policy": "gemini_policy"}
 _OBSERVED_HARNESSES = ("cursor", "opencode", "pi", "codex")
 _OBSERVED_SOURCES = ("stderr", "retry_after", "event")
 _SHORT_LABEL = {"session": "5-hour", "weekly": "Weekly", "monthly": "Monthly", "daily": "Daily",
