@@ -224,6 +224,11 @@ LEVELS = (
 
 LEVEL_IDS = tuple(level["id"] for level in LEVELS)
 DEFAULT_LEVEL = "plan"
+# Levels whose Gemini CLI jobs run without the admin policy (harness.GEMINI_POLICY_TEXT), which
+# only stops a job from switching its own approval mode. Plan, Unattended and Auto keep it: a
+# switch would take them past what they promise, all the way to approving every tool. Full access
+# already approves every tool, so a switch widens nothing there.
+GEMINI_POLICY_EXEMPT_LEVELS = ("full",)
 
 
 def level(level_id):
