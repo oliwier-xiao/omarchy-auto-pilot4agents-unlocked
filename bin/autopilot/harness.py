@@ -576,8 +576,10 @@ def sandbox_spec(harness, level_id, cwd, env, exec_prefix, run_dir):
             ro.append(os.path.realpath(gemini_policy_path()))
     elif harness == "pi":
         # Pi's config folder is read-only except that proper-lockfile needs to make lock folders in
-        # it; the session folder (set in the env) is writable. The sign-in stays readable but a
-        # refresh is not written back (it runs again next job), so the folder keeps no new file.
+        # it; the session folder (set in the env) is writable. auth.json must stay read-only: Pi runs
+        # a key written as !command, so a run that could write it would run a command of its choice
+        # the next time Pi starts outside the sandbox. An expired sign-in is renewed before the run,
+        # outside the sandbox (paid.pi_auth_probe with refresh, at pre-fire).
         agent = os.path.join(home, ".pi", "agent")
         ro.append(os.path.join(home, ".pi"))
         mkdir.append(agent)

@@ -777,6 +777,26 @@ class PiTests(PaidCase):
         self.assertEqual((preview["ok"], preview["pending"], preview["provider"]), (True, True, "openai-codex"))
         self.assertEqual(self.gate(job)["code"], "pi_auth_invalid")
 
+    def test_pi_sign_in_is_renewed_outside_the_sandbox_right_before_an_auto_run(self):
+        # In the OS sandbox ~/.pi/agent is read-only (Pi runs a key written as !command), so Pi could
+        # renew an expired sign-in there but not keep it, and a provider that rotates its refresh
+        # token would lose the sign-in. The pre-fire check of an Auto job lets Pi renew it first.
+        renew = ["auth", "check", "--provider", "openai-codex", "--json"]
+        keep = renew + ["--no-refresh"]
+        ready = json.dumps({"status": "ready", "provider": "openai-codex", "authType": "oauth"})
+        self.answer(renew, stdout=ready)
+        self.answer(keep, stdout=ready)
+        self.patch(paid.confine, "available", lambda: True)
+        auto = self.job("pi", level="auto", provider="openai-codex", model="gpt-5.5")
+        for phase, argv in (("prefire", renew), ("arm", keep), ("preview", keep)):
+            before = len(self.calls())
+            self.assertIsNone(self.gate(auto, phase=phase)["code"], phase)
+            self.assertEqual([c[1] for c in self.calls()[before:] if c[0] == "pi"], [argv], phase)
+        for level in ("plan", "full"):  # not sandboxed: Auto Pilot never renews a sign-in there
+            before = len(self.calls())
+            self.gate(self.job("pi", level=level, provider="openai-codex", model="gpt-5.5"), phase="prefire")
+            self.assertEqual([c[1] for c in self.calls()[before:] if c[0] == "pi"], [keep], level)
+
 
 # --- Cursor preflights ---------------------------------------------------------------------
 
