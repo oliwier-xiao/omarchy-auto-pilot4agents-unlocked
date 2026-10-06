@@ -85,6 +85,8 @@ MESSAGES = {
     "gemini_project_config": ("This folder has Gemini CLI settings that run commands at startup or widen the run (hooks, tool commands, a "
                               "sandbox, MCP servers, telemetry, agents or extra folders), or a .env, here or above it, that "
                               "redirects Gemini CLI. Gemini runs these before any policy, so no job runs here. Pick another folder."),
+    "opencode_zen_tools": ("OpenCode's free Zen models answer only a run that offers every tool, and this "
+                           "permission level turns tools off. Pick another model."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")

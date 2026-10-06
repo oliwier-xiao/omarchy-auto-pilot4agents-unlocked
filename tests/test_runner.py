@@ -2643,7 +2643,8 @@ class V2RunVerbTests(RunVerbBase):
                  "cursor_project_rules": "cursor_project_rules", "cursor_untrusted": "untrusted",
                  "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                  "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
-                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config"}
+                 "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
+                 "opencode_zen_tools": "opencode_zen_tools"}
         self.assertEqual(paid.REASON_FOR_CODE, table)
         for code, reason in table.items():
             job = self.seed(name="codex")

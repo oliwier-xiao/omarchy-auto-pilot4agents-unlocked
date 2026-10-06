@@ -47,7 +47,7 @@ REASONS = ("auth", "not_found", "untrusted", "boundary_mismatch", "max_turns", "
            "limit_suspected", "stalled", "cursor_autorun_config", "cursor_network_config",
            "cursor_project_rules", "harness_gated", "monthly_limit", "quota_final", "cursor_sandbox",
            "gemini_policy", "opencode_plugin_code", "codex_project_config",
-           "gemini_project_config")
+           "gemini_project_config", "opencode_zen_tools")
 LIMIT_KINDS = ("session", "weekly", "monthly", "daily", "billing_total", "billing_pool",
                "model_session", "model_weekly", "model_monthly", "other")
 LIMIT_SOURCES = ("event", "transcript", "banner", "record", "backoff", "stderr", "retry_after", "computed")

@@ -27,13 +27,14 @@ _FIRE_AT_ERRORS = ("time_past", "time_too_far", "no_reset_data", "reset_not_open
 GATE_CODES = ("harness_gated", "cursor_autorun_config", "cursor_network_config", "cursor_project_rules",
               "cursor_untrusted", "not_logged_in", "pi_auth_invalid", "paid_blocked", "paid_zen",
               "paid_opencode_claude", "paid_pi_claude", "paid_pi_key", "gemini_policy", "opencode_plugin_code",
-              "codex_project_config", "gemini_project_config")
+              "codex_project_config", "gemini_project_config", "opencode_zen_tools")
 _GATE_FIELD = {"harness_gated": "harness", "cursor_autorun_config": "target.cwd",
                "cursor_network_config": "target.cwd", "cursor_project_rules": "target.cwd",
                "cursor_untrusted": "target.cwd", "pi_auth_invalid": "provider", "paid_blocked": "allowPaid",
                "paid_zen": "allowPaid", "paid_opencode_claude": "allowPaid", "paid_pi_claude": "allowPaid",
                "paid_pi_key": "allowPaid", "gemini_policy": "harness", "opencode_plugin_code": "target.cwd",
-               "codex_project_config": "target.cwd", "gemini_project_config": "target.cwd"}
+               "codex_project_config": "target.cwd", "gemini_project_config": "target.cwd",
+               "opencode_zen_tools": "model"}
 _GATE_DEADLINE_MAX_S = 30.0
 
 

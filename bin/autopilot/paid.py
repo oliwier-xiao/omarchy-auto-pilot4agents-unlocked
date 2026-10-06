@@ -26,7 +26,7 @@ import os
 import re
 import stat
 
-from . import bounded, consts, fsio, h5_v2, harness, identity
+from . import bounded, consts, edition, fsio, h5_v2, harness, identity
 from . import usage as usage_mod
 from .errors import ApError
 
@@ -48,6 +48,7 @@ REASON_FOR_CODE = {
     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
     "gemini_policy": "gemini_policy", "opencode_plugin_code": "opencode_plugin_code",
     "codex_project_config": "codex_project_config", "gemini_project_config": "gemini_project_config",
+    "opencode_zen_tools": "opencode_zen_tools",
 }
 
 LEVEL = "plan"                        # probes run with the environment of the plan level
@@ -636,6 +637,22 @@ def classify_opencode(model, verbose, catalogue, catalogue_mtime, now, project_c
             or catalogue_mtime > now + _CLOCK_SKEW_S:
         return "unknown"
     return "zen_free"
+
+
+# The OpenCode permissions that each turn one of its tools off (a permission such as external_directory
+# turns none off). OpenCode Zen's free models refuse a run whose tool list is cut down: HTTP 403 "OpenCode's
+# free tier can only be used from within OpenCode", seen on 1.18.34 as soon as one tool is denied.
+_OPENCODE_TOOL_PERMISSIONS = ("*", "edit", "bash", "webfetch", "websearch", "task")
+
+
+def opencode_hides_tools(level_id):
+    """True when the level's OPENCODE_PERMISSION turns an OpenCode tool off."""
+    level = edition.level(level_id) if isinstance(level_id, str) else None
+    entry = (level or {}).get("harness", {}).get("opencode")
+    if not entry:
+        return False
+    rules = json.loads(entry["env"].get("OPENCODE_PERMISSION") or "{}")
+    return any(rules.get(key) == "deny" for key in _OPENCODE_TOOL_PERMISSIONS)
 
 
 def opencode_default_model(home):
@@ -1243,6 +1260,8 @@ def check_job(job, *, phase, now, usage, sd=None, exec_prefix=None, deadline_s=1
         pending = pending or bool(found["pending"])
         if code is None and not allow:
             code = {"zen_paid": "paid_zen", "anthropic": "paid_opencode_claude"}.get(billing)
+        if code is None and billing == "zen_free" and opencode_hides_tools(job.get("level")):
+            code = "opencode_zen_tools"
 
     # 5. notes
     notes = ["paid_on" if allow else "subscription_only"]

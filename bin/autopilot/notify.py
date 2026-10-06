@@ -77,6 +77,7 @@ REASON_SENTENCES = {
     "opencode_plugin_code": "This folder has OpenCode plugin code that would run at startup, so nothing ran.",
     "codex_project_config": "This folder has its own Codex settings that could reach past the sandbox, so nothing ran.",
     "gemini_project_config": "This folder has Gemini CLI settings or a .env that would run code or redirect it at startup, so nothing ran.",
+    "opencode_zen_tools": "OpenCode's free Zen models need every tool on, which this permission level turns off, so nothing ran.",
 }
 
 SUCCESS_EVENTS = ("done", "deferred", "limit_rearmed", "transient_rearmed", "busy_deferred")
