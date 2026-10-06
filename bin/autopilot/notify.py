@@ -80,6 +80,7 @@ REASON_SENTENCES = {
     "opencode_zen_tools": "OpenCode's free Zen models need every tool on, which this permission level turns off, so nothing ran.",
     "claude_auto_model": "Claude Code started without Auto mode, which this model, fast mode or your plan does not allow, so nothing ran.",
     "codex_mcp_config": "Your Codex settings could not be read to turn their MCP servers off, so nothing ran.",
+    "sandbox_unavailable": "This computer's kernel cannot sandbox the job, so nothing ran.",
 }
 
 SUCCESS_EVENTS = ("done", "deferred", "limit_rearmed", "transient_rearmed", "busy_deferred")

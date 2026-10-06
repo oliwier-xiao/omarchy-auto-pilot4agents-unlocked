@@ -46,8 +46,8 @@ decision = "allow"
 priority = 600
 modes = ["default"]
 
-# Auto (autoEdit mode) adds file edits and web_fetch, never the shell, nor an edit to Gemini CLI's own
-# settings or to a .env file.
+# Auto (autoEdit mode) adds file edits, web_fetch and the shell, confined to the working folder by the OS
+# sandbox; an edit to Gemini CLI's own settings or to a .env file stays denied.
 [[rule]]
 toolName = "*"
 decision = "deny"
@@ -56,7 +56,7 @@ modes = ["autoEdit"]
 denyMessage = "This tool is not available at this level."
 
 [[rule]]
-toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task", "write_file", "replace", "web_fetch"]
+toolName = ["read_file", "list_directory", "glob", "grep_search", "update_topic", "google_web_search", "get_internal_docs", "complete_task", "write_file", "replace", "web_fetch", "run_shell_command"]
 decision = "allow"
 priority = 600
 modes = ["autoEdit"]
@@ -67,13 +67,6 @@ argsPattern = '\x00"agent_name":"(codebase_investigator|cli_help|generalist)"\x0
 decision = "allow"
 priority = 600
 modes = ["autoEdit"]
-
-[[rule]]
-toolName = "run_shell_command"
-decision = "deny"
-priority = 700
-modes = ["autoEdit"]
-denyMessage = "Shell commands are not allowed at this level."
 
 [[rule]]
 toolName = ["write_file", "replace"]

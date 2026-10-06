@@ -35,6 +35,7 @@ _REASON_FOR_CODE = {"paid_blocked": "paid_blocked", "paid_zen": "paid_blocked", 
                     "gemini_project_config": "gemini_project_config", "opencode_zen_tools": "opencode_zen_tools",
                     "claude_auto_model": "claude_auto_model",
                     "codex_mcp_config": "codex_mcp_config",
+                    "sandbox_unavailable": "sandbox_unavailable",
                     "harness_gated": "harness_gated", "not_logged_in": "not_logged_in", "pi_auth_invalid": "failed",
                     "gemini_policy": "gemini_policy"}
 _OBSERVED_HARNESSES = ("cursor", "opencode", "pi", "codex")

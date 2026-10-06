@@ -78,9 +78,10 @@ _OPENCODE_READ_ONLY_ENV = {"OPENCODE_PERMISSION": _OPENCODE_READ_ONLY,
 # (Anthropic through an auth plugin) runs at every level. A plugin's own code still runs inside
 # OpenCode, outside every rule above, and writes where it likes (oh-my-openagent keeps a .omo folder
 # in the working folder).
-# Auto turns shell off for the same reason: left to ask, a command headed by cd with a redirection
-# is never asked about and writes wherever it points, outside the working folder included.
-_OPENCODE_AUTO = ('{"edit":"allow","bash":"deny","webfetch":"allow","websearch":"allow",'
+# Auto allows the shell: the job runs confined by the OS sandbox (harness.sandbox_spec), so a
+# command cannot write outside the working folder (external_directory stays denied too) and cannot
+# reach the session bus to escape it. Reaching another folder would still ask, so it is rejected.
+_OPENCODE_AUTO = ('{"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"deny","doom_loop":"deny"}')
 _OPENCODE_FULL = ('{"edit":"allow","bash":"allow","webfetch":"allow","websearch":"allow",'
                   '"task":"allow","external_directory":"allow","doom_loop":"allow"}')
@@ -209,7 +210,8 @@ LEVELS = (
                 "initPermissionMode": "auto",
             },
             "opencode": {
-                "caption": "Edits, web and subagents run. Shell commands are off, since nobody is there to approve them.",
+                "caption": ("Edits, shell, web and subagents run, confined to the working folder by the OS sandbox. "
+                            "Reaching another folder would ask, so it is rejected."),
                 "argv": [],
                 "env": {"OPENCODE_PERMISSION": _OPENCODE_AUTO},
                 "initPermissionMode": None,
@@ -221,14 +223,16 @@ LEVELS = (
                 "initPermissionMode": None,
             },
             "gemini": {
-                "caption": "Auto edit. File edits and web fetch are approved. Shell, and edits to Gemini's own settings or a .env file, are denied.",
+                "caption": ("Auto edit. File edits, web fetch and shell commands run, confined to the working folder "
+                            "by the OS sandbox. Edits to Gemini's own settings or a .env file are denied."),
                 "argv": ["--approval-mode", "auto_edit"] + list(_GEMINI_ISOLATION),
                 "env": {},
                 "initPermissionMode": None,
             },
             "pi": {
-                "caption": "Pi can read and edit files: read, grep, find, ls, edit and write. It cannot run commands, but Pi keeps no edit inside the working folder: it can write any file you can.",
-                "argv": _PI_BASE + ["--tools", "read,grep,find,ls,edit,write"],
+                "caption": ("Pi reads, edits files and runs commands, confined to the working folder by the OS sandbox: "
+                            "read, bash, edit, write, grep, find and ls."),
+                "argv": _PI_BASE + ["--tools", "read,bash,edit,write,grep,find,ls"],
                 "env": dict(_PI_ENV),
                 "initPermissionMode": None,
             },

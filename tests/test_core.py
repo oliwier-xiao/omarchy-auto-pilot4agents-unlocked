@@ -130,6 +130,9 @@ V2_MESSAGES = {
                           "would start without it. Pick another model."),
     "codex_mcp_config": ("Codex runs MCP servers outside its sandbox, and your Codex settings could not be "
                          "read to turn them off for this job. Fix ~/.codex/config.toml first."),
+    "sandbox_unavailable": ("This computer's Linux kernel cannot sandbox a job (no Landlock), so Auto with the "
+                            "shell on is not offered for this agent here. Pick Plan or Unattended, or Full access "
+                            "on your own responsibility."),
 }
 CONTRACT_MESSAGES.update(V2_MESSAGES)
 V2_REASONS = {
@@ -155,6 +158,7 @@ V2_REASONS = {
     "opencode_zen_tools": "OpenCode's free Zen models need every tool on, which this permission level turns off, so nothing ran.",
     "claude_auto_model": "Claude Code started without Auto mode, which this model, fast mode or your plan does not allow, so nothing ran.",
     "codex_mcp_config": "Your Codex settings could not be read to turn their MCP servers off, so nothing ran.",
+    "sandbox_unavailable": "This computer's kernel cannot sandbox the job, so nothing ran.",
 }
 
 
@@ -2134,7 +2138,7 @@ class V2CoreTests(Sandbox):
                   "opencode_plugin_code": "target.cwd", "codex_project_config": "target.cwd",
                   "gemini_project_config": "target.cwd", "opencode_zen_tools": "model",
                   "claude_auto_model": "model",
-                  "codex_mcp_config": "harness"}
+                  "codex_mcp_config": "harness", "sandbox_unavailable": "harness"}
         self.assertEqual(set(fields), set(cli_core.GATE_CODES))
         for code, field in fields.items():
             detail = {"provider": "openrouter"} if code == "paid_pi_key" else None

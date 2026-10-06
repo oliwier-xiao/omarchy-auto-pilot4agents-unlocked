@@ -91,6 +91,9 @@ MESSAGES = {
                           "would start without it. Pick another model."),
     "codex_mcp_config": ("Codex runs MCP servers outside its sandbox, and your Codex settings could not be "
                          "read to turn them off for this job. Fix ~/.codex/config.toml first."),
+    "sandbox_unavailable": ("This computer's Linux kernel cannot sandbox a job (no Landlock), so Auto with the "
+                            "shell on is not offered for this agent here. Pick Plan or Unattended, or Full access "
+                            "on your own responsibility."),
 }
 
 DETAIL_KEYS = ("until", "partial", "fireAt", "status", "provider")
