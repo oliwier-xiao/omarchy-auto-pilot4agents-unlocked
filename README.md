@@ -60,10 +60,7 @@ omarchy restart shell
 
 The widget is listed as **Auto Pilot Unlocked** in the bar's widget settings.
 
-Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps,
-jobs first: see [Removal](#removal).
-
-Update with `omarchy plugin update oliwier.auto-pilot4agents`. Removal takes three steps, jobs
+Update with `omarchy plugin update oliwier.auto-pilot4agents-unlocked`. Removal takes three steps, jobs
 first: see [Removal](#removal).
 
 ## Dependencies
